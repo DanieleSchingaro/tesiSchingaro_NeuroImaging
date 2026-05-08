@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data
+data/raw/
+data/processed/
+data/splits/
+outputs/generated/
+
+# Modelli
+outputs/models/
+*.pth
+*.pt
+
+# Log e MLflow
+logs/
+mlruns/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Sistema
+.DS_Store
+*.out
