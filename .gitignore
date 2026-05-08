@@ -5,14 +5,18 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-# Data
-data/raw/
-data/processed/
-data/splits/
-outputs/generated/
+# Dati reali
+/data/raw/hc_adni_brain_mask/
+/data/raw/hc_nifd_brain_mask/
+/data/raw/hc_oasis1_brain_mask/
+/data/raw/hc_oasis2_brain_mask/
+/data/raw/hc_oasis3_brain_mask/
+/data/raw/hc_ppmi_brain_mask/
+/data/processed/
+/data/splits/
+/outputs/generated/
 
 # Modelli
-outputs/models/
 *.pth
 *.pt
 
