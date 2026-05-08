@@ -9,7 +9,7 @@ scikit-image>=0.20.0
 SimpleITK
 accelerate==0.32.1
 einops>=0.7.0
-mlflow==2.14.1
+mlflow==2.19.0
 tensorboard>=2.14.0
 matplotlib>=3.7.0
 tqdm>=4.65.0
