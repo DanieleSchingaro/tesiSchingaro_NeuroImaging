@@ -1,0 +1,11 @@
+{
+    "data_base_dir": "./data/raw",
+    "embedding_base_dir": "./data/processed/embeddings",
+    "json_data_list": "./data/splits/dataset.json",
+    "model_dir": "./outputs/models",
+    "model_filename": "diff_unet.pt",
+    "output_dir": "./outputs/generated",
+    "output_prefix": "ldm_brain_hc",
+    "trained_autoencoder_path": "./outputs/models/autoencoder.pt",
+    "modality_mapping_path": "./configs/modality_mapping.json"
+}

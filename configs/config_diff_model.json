@@ -1,0 +1,24 @@
+{
+    "diffusion_unet_train": {
+        "batch_size": 1,
+        "cache_rate": 0,
+        "lr": 0.00001,
+        "n_epochs": 1000,
+        "num_workers": 4
+    },
+    "diffusion_unet_inference": {
+        "dim": [256, 256, 256],
+        "spacing": [1, 1, 1],
+        "random_seed": 42,
+        "num_inference_steps": 30,
+        "modality": 29,
+        "cfg_guidance_scale": 10
+    },
+    "paths": {
+        "embedding_base_dir": "./data/processed/embeddings",
+        "model_dir": "./outputs/models",
+        "model_filename": "diff_unet.pt",
+        "splits_path": "./data/splits/dataset.json",
+        "trained_autoencoder_path": "./outputs/models/autoencoder.pt"
+    }
+}
