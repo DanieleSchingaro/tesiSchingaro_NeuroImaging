@@ -1,3 +1,4 @@
+#tests/test_vae.py
 """
 Test rapido del VAE.
 Esegui con: python3 -m tests.test_vae
