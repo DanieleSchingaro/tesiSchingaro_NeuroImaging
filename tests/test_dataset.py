@@ -30,13 +30,13 @@ def test_dataloader():
 
     batch = next(iter(train_loader))
     images = batch["image"]
-    print(f"✅ Batch shape: {images.shape}")
-    print(f"✅ Min: {images.min():.4f}, Max: {images.max():.4f}")
-    print(f"✅ Dtype: {images.dtype}")
+    print(f"Batch shape: {images.shape}")
+    print(f"Min: {images.min():.4f}, Max: {images.max():.4f}")
+    print(f"Dtype: {images.dtype}")
     assert images.shape == (1, 1, 64, 64, 64), "Shape non corretta!"
     assert images.min() >= 0.0, "Min fuori range!"
     assert images.max() <= 1.0, "Max fuori range!"
-    print("✅ Test DataLoader superato!")
+    print("Test DataLoader superato!")
 
 if __name__ == "__main__":
     test_dataloader()

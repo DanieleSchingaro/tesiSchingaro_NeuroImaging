@@ -9,7 +9,7 @@ from src.training.train_vae import load_config, setup_models, setup_losses
 from src.data.dataset import get_file_list, DATASET_DIRS, create_dataloader
 
 def test_vae(n_batches: int = 2):
-    print("🔄 Test rapido VAE...")
+    print("Test rapido VAE...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_determinism(seed=42)
 
@@ -36,14 +36,14 @@ def test_vae(n_batches: int = 2):
         with autocast("cuda", enabled=True):
             reconstruction, z_mu, z_sigma = autoencoder(images)
             recon_loss = l1_loss(reconstruction.float(), images.float())
-        print(f"✅ Batch {i+1}: input={images.shape}, "
+        print(f"Batch {i+1}: input={images.shape}, "
               f"recon={reconstruction.shape}, "
               f"latent_mu={z_mu.shape}, "
               f"loss={recon_loss.item():.4f}")
         assert reconstruction.shape == images.shape, "Shape ricostruzione non corretta!"
         assert z_mu.shape == (1, 4, 16, 16, 16), "Shape latente non corretta!"
 
-    print("✅ Test VAE superato!")
+    print("Test VAE superato!")
 
 if __name__ == "__main__":
     test_vae()
