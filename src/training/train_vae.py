@@ -21,6 +21,8 @@ from monai.losses import PerceptualLoss
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.utils import set_determinism
 from src.data.dataset import setup_dataloaders
+import matplotlib.pyplot as plt
+    import numpy as np
 
 def load_config(config_path:str)->dict:
     """Carica file di configurazione json"""
@@ -328,6 +330,67 @@ def save_checkpoint(
         torch.save(checkpoint, best_path)
         print(f"Miglior modello salvato (val_loss={val_loss:.4f})")
 
+def save_learning_curves(
+    train_recon_loss:list,
+    val_recon_loss:list,
+    train_gen_loss:list,
+    train_disc_loss:list,
+    save_dir:str,
+    val_interval:int,
+    n_epochs:int,
+)->str:
+    """
+    Salva il grafico delle learning curves, loggandolo su MLFlow
+    3 subplot:
+    -Loss ricostruita (train+val)
+    -Generator loss
+    -Discriminator loss
+    """
+    fig, axes=plt.subplots(1,3,figsize=(18,5))
+    fig.supitle("VAE Learning Curves", fontsize=16)
+
+    epochs=np.arange(1, n_epochs+1)
+    val_epochs=np.arange(val_interval, n_epochs+1, val_interval)
+
+    #subplot 1 --> loss ricostruita
+    axes[0].plot(epochs, train_recon_loss, color="C0", label="Train")
+    if val_recon_loss:
+        axes[0].plot(val_epochs[:len(val_recon_loss)], val_recon_loss, color="C1", label="Validation")
+    
+    axes[0].set_title("Loss Ricostruita (L1)")
+    axes[0].set_xlabel("Epochs")
+    axes[0].set_ylabel("Loss")
+    axes[0].legend()
+    axes[0].grid(True)
+
+    #subplot 2 --> generator loss
+    axes[1].plot(epochs, train_gen_loss, color="C2", label="Generator")
+    axes[1].set_title("Generator Loss (Adversarial)")
+    axes[1].set_xlabel("Epochs")
+    axes[1].set_ylabel("Loss")
+    axes[1].legend()
+    axes[1].grid(True)
+
+    #subplot 3 --> discriminator loss
+    axes[2].plot(epochs, train_disc_loss, color="C3", label="Discriminator")
+    axes[2].set_title("Discriminator Loss")
+    axes[2].set_xlabel("Epochs")
+    axes[2].set_ylabel("Loss")
+    axes[2].legend()
+    axes[2].grid(True)
+
+    plt.tight_layout()
+
+    #salvataggio grafico
+    os.makedirs(save_dir, exist_ok=True)
+    curve_path=os.path.join(save_dir, "learning_curves.png")
+    plt.savefig(curve_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Learning curves salvate in {curve_path}")
+    return curve_path
+
+
 def main():
     """
     Flusso:
@@ -392,6 +455,12 @@ def main():
         scaler_g=GradScaler("cuda")
         scaler_d=GradScaler("cuda")
 
+        #accumulatori learning curves
+        all_train_recon=[]
+        all_val_recon=[]
+        all_train_gen=[]
+        all_train_disc=[]
+
         #creazione dataloaders
         config_data={
             "patch_size":list(patch_size),
@@ -439,7 +508,12 @@ def main():
                 "train_kl_loss": train_metrics["kl_loss"],
                 "train_gen_loss": train_metrics["gen_loss"],
                 "train_disc_loss": train_metrics["disc_loss"],
-            }, step=epoch)   
+            }, step=epoch) 
+
+            #accumulatori per le curve
+            all_train_recon.append(train_metrics["recon_loss"])
+            all_train_gen.append(train_metrics["gen_loss"])
+            all_train_disc.append(train_metrics["disc_loss"])  
 
             #validazione ogni val_interval epoche
             if (epoch+1) % val_interval==0:
@@ -463,7 +537,10 @@ def main():
                 print(f"Epoch {epoch+1}/{n_epochs} | "
                       f"train_recon: {train_metrics['recon_loss']:.4f} | "
                       f"val_recon: {val_metrics['val_recon_loss']:.4f}")
-                
+
+                #accumula val loss
+                all_val_recon.append(val_metrics["val_recon_loss"])
+
                 #salavataggio miglior modello
                 is_best=val_metrics["val_recon_loss"]<best_val_loss
                 if is_best:
@@ -480,6 +557,7 @@ def main():
                     is_best=is_best,
                 )
         
+        
         #tempo totale del training
         total_time=time.time()-total_start
         print(f"Training completato in {total_time/3600:.2f} ore")
@@ -487,6 +565,18 @@ def main():
         #log artifact finali su MLFlow
         mlflow.log_metrics("total_time_hours", total_time/3600)
         mlflow.log_artifact(os.path.join(save_dir, "autoencoder_best.pt"))
+
+        #salvataggio e log delle learning curves 
+        curve_path=save_learning_curves(
+            train_recon_loss=all_train_recon,
+            val_recon_loss=all_val_recon,
+            train_gen_loss=all_train_gen,
+            train_disc_loss=all_train_disc,
+            save_dir=save_dir,
+            val_interval=val_interval,
+            n_epochs=n_epochs,
+        )
+        mlflow.log_artifact(curve_path)
     
     print("Training VAE completato")
 
