@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
@@ -22,7 +23,7 @@ from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.utils import set_determinism
 from src.data.dataset import setup_dataloaders
 import matplotlib.pyplot as plt
-    import numpy as np
+import numpy as np
 
 def load_config(config_path:str)->dict:
     """Carica file di configurazione json"""
@@ -163,9 +164,10 @@ def train_one_epoch(
             #ricostruzione L1 loss
             recon_loss=l1_loss(reconstruction.float(), images.float())
             #KL divergence
+            eps=1e-10
             kl_loss=0.5*torch.sum(
-                z_mu.pow(2)+z_sigma.pow(2)-torch.log(z_sigma.pow(2))-1,
-                dim=[1,2,3,4],
+                z_mu.pow(2)+z_sigma.pow(2)-torch.log(z_sigma.pow(2)+eps)-1,
+                dim=list(range(1, len(z_sigma.shape))),
             )
             kl_loss=torch.sum(kl_loss)/kl_loss.shape[0]
             #Perceptual loss
@@ -174,7 +176,7 @@ def train_one_epoch(
             )
 
             #loss totale per autoencoder
-            loss_g=recon_loss+(kl_weight*kl_loss)+(perceptual_weight*perceptual_loss)
+            loss_g=recon_loss+(kl_weight*kl_loss)+(perceptual_weight*p_loss)
 
             #aggiunta componente adversariale dopo warm up
             if epoch>=warm_up_epochs:
@@ -347,7 +349,7 @@ def save_learning_curves(
     -Discriminator loss
     """
     fig, axes=plt.subplots(1,3,figsize=(18,5))
-    fig.supitle("VAE Learning Curves", fontsize=16)
+    fig.suptitle("VAE Learning Curves", fontsize=16)
 
     epochs=np.arange(1, n_epochs+1)
     val_epochs=np.arange(val_interval, n_epochs+1, val_interval)
@@ -416,7 +418,7 @@ def main():
     perceptual_weight=train_cfg["perceptual_weight"]
     adv_weight=train_cfg["adv_weight"]
     warm_up_epochs=train_cfg["warm_up_epochs"]
-    cache_rate=train_cfg["cache"]
+    cache_rate=train_cfg["cache_rate"]
     num_workers=train_cfg["num_workers"]
 
     #path
@@ -451,6 +453,10 @@ def main():
         l1_loss, perceptual_loss, adv_loss= setup_losses(device)
         #inizializzazione ottimizzatori
         optimizer_g, optimizer_d= setup_optimizers(autoencoder, discriminator, lr)
+        #LR scheduler come in NV-Generate
+        scheduler_g=CosineAnnealingLR(
+            optimizer_g, T_max=n_epochs, eta_min=1e-6
+        )
         #scaler per mixed precision
         scaler_g=GradScaler("cuda")
         scaler_d=GradScaler("cuda")
@@ -556,6 +562,9 @@ def main():
                     save_dir=save_dir,
                     is_best=is_best,
                 )
+            
+            scheduler_g.step()
+            mlflow.log_metric("lr", scheduler_g.get_last_lr()[0], step=epoch)
         
         
         #tempo totale del training
@@ -563,7 +572,7 @@ def main():
         print(f"Training completato in {total_time/3600:.2f} ore")
 
         #log artifact finali su MLFlow
-        mlflow.log_metrics("total_time_hours", total_time/3600)
+        mlflow.log_metric("total_time_hours", total_time/3600)
         mlflow.log_artifact(os.path.join(save_dir, "autoencoder_best.pt"))
 
         #salvataggio e log delle learning curves 
