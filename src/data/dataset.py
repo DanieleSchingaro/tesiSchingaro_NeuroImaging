@@ -48,7 +48,7 @@ DATASET_DIRS=[
 def get_file_list(dataset_dirs: list[str])->list[dict]:
     """
     Scansiona le cartelle del dataset e restituisce
-    una lista di dizionari {immagine:path} compatibile con MONAI
+    una lista di dizionari {immage:path} compatibile con MONAI
     """
     files=[]
     for folder in dataset_dirs:
@@ -102,6 +102,23 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
                 RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0, 2)),
                 RandScaleIntensityd(keys=["image"], prob=0.3, factors=(0.9, 1.1)),
                 RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.05),
+                RandZoomd(
+                    keys=["image"],
+                    prob=0.3,
+                    min_zoom=0.7,
+                    max_zoom=1.3,
+                    keep_size=True,
+                    mode="bilinear",
+                ),
+                RandRotated(
+                    keys=["image"],
+                    prob=0.3,
+                    range_x=0.1,
+                    range_y=0.1,
+                    range_z=0.1,
+                    keep_size=True,
+                    mode="bilinear",
+                ),
             ]
         
         #pad + crop casuale
@@ -174,7 +191,7 @@ def load_splits(splits_path:str)->tuple[list,list,list]:
     """
     with open(splits_path, "r") as f:
         splits=json.load(f)
-    return splits["training"], splits["validation"], splits["testing"]
+    return splits["training"], splits["validation"], splits["test"]
 
 def create_dataloader(files:list[dict], patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=None, batch_size:int=1, is_train:bool=True, random_aug:bool=True, cache_rate:float=0.5, num_workers:int=4, k:int=4,)->DataLoader:
     """
