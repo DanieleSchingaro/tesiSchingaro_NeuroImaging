@@ -6,9 +6,11 @@
     "model_filename": "diff_unet.pt",
     "output_dir": "./outputs/generated",
     "output_prefix": "ldm_brain_hc",
-    "trained_autoencoder_path": "./outputs/models/autoencoder.pt",
-    "trained_discriminator_path": "./outputs/models/discriminator.pt",
+    "trained_autoencoder_path": "./outputs/models/autoencoder_best.pt",
+    "trained_discriminator_path": "./outputs/models/discriminator_best.pt",
+    "trained_diffusion_path": "./outputs/models/diff_unet_best.pt",
     "modality_mapping_path": "./configs/modality_mapping.json",
+    "label_dict_json": "./configs/label_dict.json",
     "tfevent_path": "./outputs/tfevent",
     "finetune": false
 }
