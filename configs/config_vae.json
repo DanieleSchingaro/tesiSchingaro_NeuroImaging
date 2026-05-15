@@ -17,10 +17,10 @@
         "adv_weight": 0.1,
         "recon_loss": "l1",
         "val_interval": 10,
-        "cache_rate": 0.5,
+        "cache_rate": 0.0,
         "amp": true,
         "n_epochs": 300,
-        "num_workers": 4,
+        "num_workers": 2,
         "warm_up_epochs": 5
     },
     "paths": {

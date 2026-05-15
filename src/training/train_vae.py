@@ -191,6 +191,8 @@ def train_one_epoch(
         
         #backward pass
         scaler_g.scale(loss_g).backward()
+        scaler_g.unscale_(optimizer_g)
+        torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=1.0)
         scaler_g.step(optimizer_g)
         scaler_g.update()
 
@@ -218,6 +220,8 @@ def train_one_epoch(
 
             #backward pass
             scaler_d.scale(loss_d).backward()
+            scaler_d.unscale_(optimizer_d)
+            torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=1.0)
             scaler_d.step(optimizer_d)
             scaler_d.update()
 
