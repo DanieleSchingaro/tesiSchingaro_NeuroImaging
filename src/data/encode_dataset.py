@@ -10,13 +10,10 @@ import os
 import json
 import logging
 import argparse
-from pathlib import Path 
-from typing import Optional
-import nibabel as nib
+from typing import Optional, Tuple
 import numpy as np 
 import torch
 from torch.amp import autocast
-from monai.inferers import SlidingWindowInferer
 from monai.transforms import(
     Compose,
     LoadImaged,
@@ -106,44 +103,33 @@ def encode_volume(
     transforms:Compose,
     device:torch.device,
     logger:logging.Logger,
-)->Optional[np.ndarray]:
+)->Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """
     Encoding su un singolo volume MRI nello spazio latente.
-    Usa SlidingWindowInferer per gestire volumi grandi che non entrano in GPU.
-    Il latente viene salvato come array numpy con shape (X,Y,Z,C) ove
-    C=4 sono i canali latenti.
+    Il latente viene salvato in formato [C,X,Y,Z] -> standard pytorch.
     """
     try:
         #carica e processa il volume
         data=transforms({"image": image_path})
         image=data["image"]
         #affine per salvare il NIfTI
-        affine=image.meta["affine"].numpy()
+        affine=np.array(image.meta["affine"])
         #aggiunta dimensione del batch
         pt_image=image.unsqueeze(0).to(device)
 
         with torch.inference_mode():
-            with autocast("cuda", enabled=True):
-                #SlidingWindowInferer gestisce volumi più grandi della VRAM
-                #roi_size deve essere divisibile per il fattore di compressione del VAE
-                inferer=SlidingWindowInferer(
-                    roi_size=[128,128,128],
-                    sw_batch_size=1,
-                    progress=False,
-                    mode="gaussian",
-                    overlap=0.25,
-                    sw_device=device,
-                    device=device,
-                )
-
+            with autocast(device_type=device.type, enabled=device.type=="cuda"):
                 #encode nello spazio latente
-                z=inferer(pt_image, autoencoder.encode_stage_2_inputs)
+                z=autoencoder.encode_stage_2_inputs(pt_image)
 
-        logger.info(f"Latente shape: {z.shape}, dtype: {z.dtype}")
+        logger.info(
+            f"Latent shape: {z.shape}, "
+            f"min: {z.min().item():.3f}, "
+            f"max: {z.max().item():.3f}"
+        )
 
-        #conversione in numpy: [1,C,X,Y,Z] -> [X,Y,Z,C]
+        #conversione in numpy: [1,C,X,Y,Z] -> [C,X,Y,Z]
         z_np=z.squeeze(0).cpu().float().numpy()
-        z_np=np.transpose(z_np, (1,2,3,0))
 
         return z_np, affine
 
@@ -164,7 +150,7 @@ def encode_dataset(
     Struttura output:
     data/processed/embeddings/
         hc_adni_brain_mask/
-            file1_emb_nii_gz
+            file1_emb.npy
             ...
         hc_nifd_brain_mask/
             ...
@@ -197,7 +183,7 @@ def encode_dataset(
         #es: data/raw/hc_adni.../file.nii.gz
         # -> data/processed/embeddings/hc_adni.../file_emb.nii.gz
         rel_path=image_path.replace("data/raw/", "")
-        emb_filename=rel_path.replace(".nii.gz", "_emb.nii.gz")
+        emb_filename=rel_path.replace(".nii.gz", "_emb.npy")
         emb_path=os.path.join(embedding_base_dir, emb_filename)
 
         #skippa se già processato
@@ -224,9 +210,8 @@ def encode_dataset(
         #crea la cartella di output
         os.makedirs(os.path.dirname(emb_path), exist_ok=True)
 
-        #salva come NIfTI
-        emb_img=nib.Nifti1Image(np.float32(z_np), affine=affine)
-        nib.save(emb_img, emb_path)
+        #salva come .npy
+        np.save(emb_path, z_np)
 
         logger.info(f"Salvato: {emb_path} | shape: {z_np.shape}")
         processed+=1
