@@ -5,12 +5,9 @@ Basato su NV-Generate-CTMR (NVIDIA, 2026)
 """
 
 import os
-import sys
 import json
 import time
-from pathlib import Path
 import torch
-import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -125,7 +122,6 @@ def train_one_epoch(
     perceptual_loss,
     adv_loss,
     scaler_g:GradScaler,
-    scaler_d:GradScaler,
     device:torch.device,
     kl_weight:float,
     perceptual_weight:float,
@@ -188,6 +184,12 @@ def train_one_epoch(
                 )
                 loss_g+=adv_weight*generator_loss
                 epoch_gen_loss+=generator_loss.item()
+
+        #NaN guard - salta lo step se loss esplode
+        if torch.isnan(loss_g) or torch.isinf(loss_g):
+            print(f"[WARNING] NaN/Inf in loss_g epoch {epoch} step {step}, skip")
+            optimizer_g.zero_grad(set_to_none=True)
+            continue
         
         #backward pass
         scaler_g.scale(loss_g).backward()
@@ -197,35 +199,26 @@ def train_one_epoch(
         scaler_g.update()
 
         #Discriminator --> solo dopo warm up
-        if epoch>=warm_up_epochs:
+        if epoch>=warm_up_epochs and step%2==0:
             optimizer_d.zero_grad(set_to_none=True)
-            with autocast("cuda", enabled=True):
-                #logits su immagini fake
-                logits_fake=discriminator(reconstruction.contiguous().detach().float())[-1]
-                loss_d_fake=adv_loss(
-                    logits_fake,
-                    target_is_real=False,
-                    for_discriminator=True,
-                )
-                #logist su immagini reali
-                logits_real=discriminator(images.contiguous().detach().float())[-1]
-                loss_d_real=adv_loss(
-                    logits_real,
-                    target_is_real=True,
-                    for_discriminator=True,
-                )
-                #media delle due loss
-                discriminator_loss=(loss_d_fake+loss_d_real)*0.5
-                loss_d=adv_weight*discriminator_loss
+            
+            logits_fake=discriminator(reconstruction.contiguous().detach().float())[-1]
+            logits_fake=torch.clamp(logits_fake,-10,10)
+            loss_d_fake=adv_loss(logits_fake, target_is_real=False, for_discriminator=True)
 
-            #backward pass
-            scaler_d.scale(loss_d).backward()
-            scaler_d.unscale_(optimizer_d)
-            torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=1.0)
-            scaler_d.step(optimizer_d)
-            scaler_d.update()
+            logits_real=discriminator(images.contiguous().detach().float())[-1]
+            logits_real=torch.clamp(logits_real,-10,10)
+            loss_d_real=adv_loss(logits_real, target_is_real=True, for_discriminator=True)
+
+            discriminator_loss=(loss_d_fake+loss_d_real)*0.5
+            loss_d=adv_weight*discriminator_loss
+
+            loss_d.backward()
+            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
+            optimizer_d.step()
 
             epoch_disc_loss+=discriminator_loss.item()
+
 
         #accumula loss
         epoch_recon_loss+=recon_loss.item()
@@ -453,6 +446,16 @@ def main():
 
         #inizializzazione parametri
         autoencoder, discriminator=setup_models(config_vae, device)
+        #caricamento checkpoint per fine-tuning se finetune=True
+        if config_env.get("finetune", False):
+            ckpt_path=config_env.get("trained_autoencoder_path")
+            if ckpt_path and os.path.exists(ckpt_path):
+                checkpoint=torch.load(ckpt_path, map_location=device)
+                if isinstance(autoencoder, torch.nn.DataParallel):
+                    autoencoder.module.load_state_dict(checkpoint["autoencoder_state_dict"])
+                else:
+                    autoencoder.load_state_dict(checkpoint["autoencoder_state_dict"])
+                print(f"Checkpoint caricato da {ckpt_path}")
         #inizializzazione loss
         l1_loss, perceptual_loss, adv_loss= setup_losses(device)
         #inizializzazione ottimizzatori
@@ -463,7 +466,6 @@ def main():
         )
         #scaler per mixed precision
         scaler_g=GradScaler("cuda")
-        scaler_d=GradScaler("cuda")
 
         #accumulatori learning curves
         all_train_recon=[]
@@ -504,7 +506,6 @@ def main():
                 perceptual_loss=perceptual_loss,
                 adv_loss=adv_loss,
                 scaler_g=scaler_g,
-                scaler_d=scaler_d,
                 device=device,
                 kl_weight=kl_weight,
                 perceptual_weight=perceptual_weight,

@@ -12,5 +12,5 @@
     "modality_mapping_path": "./configs/modality_mapping.json",
     "label_dict_json": "./configs/label_dict.json",
     "tfevent_path": "./outputs/tfevent",
-    "finetune": false
+    "finetune": true
 }
