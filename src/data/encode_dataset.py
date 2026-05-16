@@ -115,7 +115,7 @@ def encode_volume(
     """
     try:
         #carica e processa il volume
-        data=transforms({"image"}: image_path)
+        data=transforms({"image": image_path})
         image=data["image"]
         #affine per salvare il NIfTI
         affine=image.meta["affine"].numpy()
@@ -196,7 +196,7 @@ def encode_dataset(
         #costruisce il path dell'embedding
         #es: data/raw/hc_adni.../file.nii.gz
         # -> data/processed/embeddings/hc_adni.../file_emb.nii.gz
-        rel_path=image.path.replace("data/raw/", "")
+        rel_path=image_path.replace("data/raw/", "")
         emb_filename=rel_path.replace(".nii.gz", "_emb.nii.gz")
         emb_path=os.path.join(embedding_base_dir, emb_filename)
 
