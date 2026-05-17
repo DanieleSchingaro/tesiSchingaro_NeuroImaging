@@ -18,3 +18,8 @@ mlruns/
 .ipynb_checkpoints/
 .DS_Store
 *.out
+outputs/models/*.pt
+outputs/models/*.pth
+outputs/generated/*.nii.gz
+outputs/generated/*.npy
+outputs/tfevent/
