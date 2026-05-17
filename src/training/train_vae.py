@@ -106,7 +106,7 @@ def setup_optimizers(autoencoder:torch.nn.Module, discriminator:torch.nn.Module,
     #ottimizzatore per il discriminator
     optimizer_d=torch.optim.Adam(
         params=discriminator.parameters(),
-        lr=lr*2,
+        lr=lr*0.5,
     )
 
     return optimizer_g, optimizer_d
@@ -161,11 +161,10 @@ def train_one_epoch(
             recon_loss=l1_loss(reconstruction.float(), images.float())
             #KL divergence
             eps=1e-10
-            kl_loss=0.5*torch.sum(
-                z_mu.pow(2)+z_sigma.pow(2)-torch.log(z_sigma.pow(2)+eps)-1,
-                dim=list(range(1, len(z_sigma.shape))),
+            kl_loss=0.5*(
+                z_mu.pow(2)+z_sigma.pow(2)-torch.log(z_sigma.pow(2)+eps)-1
             )
-            kl_loss=torch.sum(kl_loss)/kl_loss.shape[0]
+            kl_loss=kl_loss.mean()
             #Perceptual loss
             p_loss=perceptual_loss(
                 reconstruction.float(), images.float(),
@@ -212,6 +211,12 @@ def train_one_epoch(
 
             discriminator_loss=(loss_d_fake+loss_d_real)*0.5
             loss_d=adv_weight*discriminator_loss
+
+            #NaN guard - salta lo step se loss esplode
+            if torch.isnan(loss_d) or torch.isinf(loss_d):
+                print(f"[WARNING] NaN/Inf in loss_g epoch {epoch} step {step}, skip")
+                optimizer_d.zero_grad(set_to_none=True)
+                continue
 
             loss_d.backward()
             torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
@@ -382,7 +387,7 @@ def save_learning_curves(
 
     #salvataggio grafico
     os.makedirs(save_dir, exist_ok=True)
-    curve_path=os.path.join(save_dir, "learning_curves.png")
+    curve_path=os.path.join("outputs", "metrics", "learning_curves_vae.png")
     plt.savefig(curve_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
