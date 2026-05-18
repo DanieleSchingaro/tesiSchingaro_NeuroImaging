@@ -113,14 +113,18 @@ def encode_volume(
         data=transforms({"image": image_path})
         image=data["image"]
         #affine per salvare il NIfTI
-        affine=np.array(image.meta["affine"])
+        affine=image.meta.get("original_affine", None)
+        if affine is None:
+            affine=image.meta.get("affine", None)
+        if affine is not None:
+            affine=np.array(affine)
         #aggiunta dimensione del batch
         pt_image=image.unsqueeze(0).to(device)
 
         with torch.inference_mode():
-            with autocast(device_type=device.type, enabled=device.type=="cuda"):
-                #encode nello spazio latente
-                z=autoencoder.encode_stage_2_inputs(pt_image)
+            #encode nello spazio latente
+            z_mu, _=autoencoder.encode(pt_image)
+            z=z_mu
 
         logger.info(
             f"Latent shape: {z.shape}, "
@@ -183,7 +187,7 @@ def encode_dataset(
         #es: data/raw/hc_adni.../file.nii.gz
         # -> data/processed/embeddings/hc_adni.../file_emb.nii.gz
         rel_path=image_path.replace("data/raw/", "")
-        emb_filename=rel_path.replace(".nii.gz", "_emb.npy")
+        emb_filename=rel_path.replace(".nii.gz", "_emb.npz")
         emb_path=os.path.join(embedding_base_dir, emb_filename)
 
         #skippa se già processato
@@ -210,8 +214,8 @@ def encode_dataset(
         #crea la cartella di output
         os.makedirs(os.path.dirname(emb_path), exist_ok=True)
 
-        #salva come .npy
-        np.save(emb_path, z_np)
+        #salva come .npz
+        np.savez(emb_path, z=z_np, affine=affine)
 
         logger.info(f"Salvato: {emb_path} | shape: {z_np.shape}")
         processed+=1
