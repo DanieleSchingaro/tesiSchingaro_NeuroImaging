@@ -1,0 +1,6 @@
+outs:
+- md5: 335037a5c709d5e33e9f18224035b2cd.dir
+  size: 229279868
+  nfiles: 131
+  hash: md5
+  path: hc_oasis1_brain_mask
