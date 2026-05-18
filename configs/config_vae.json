@@ -19,7 +19,7 @@
         "val_interval": 10,
         "cache_rate": 0.0,
         "amp": true,
-        "n_epochs": 50,
+        "n_epochs": 300,
         "num_workers": 2,
         "warm_up_epochs": 5
     },
