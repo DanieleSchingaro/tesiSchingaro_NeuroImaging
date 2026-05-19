@@ -36,7 +36,7 @@ def raw_to_embedding_path(raw_path:str)->str:
     Converte il path della MRI raw nel path dell'embedding.
     Gestisce .nii.gz, .nifti.nii.gz e .nii
     """
-    rel=raw_path.replace("data/raw", "")
+    rel=raw_path.replace("data/raw/", "")
 
     if rel.endswith(".nii.gz"):
         base=rel[:-7]
