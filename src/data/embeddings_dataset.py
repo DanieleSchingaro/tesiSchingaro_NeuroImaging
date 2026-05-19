@@ -50,7 +50,7 @@ def raw_to_embedding_path(raw_path:str)->str:
 
 def main():
     with open(SPLITS_PATH, "r") as f:
-        splits=json.load()
+        splits=json.load(f)
     
     new_splits={}
     total_files=0
