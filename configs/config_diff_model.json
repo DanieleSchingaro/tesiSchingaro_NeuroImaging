@@ -17,8 +17,8 @@
     "paths": {
         "embedding_base_dir": "./data/processed/embeddings",
         "model_dir": "./outputs/models",
-        "model_filename": "diff_unet.pt",
-        "splits_path": "./data/splits/dataset.json",
-        "trained_autoencoder_path": "./outputs/models/autoencoder.pt"
+        "model_filename": "ldm_unet_best.pt",
+        "splits_path": "./data/splits/embeddings_dataset.json",
+        "trained_autoencoder_path": "./outputs/models/autoencoder_best.pt"
     }
 }
