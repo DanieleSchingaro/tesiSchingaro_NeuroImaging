@@ -74,6 +74,13 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
         EnsureChannelFirstd(keys=["image"]),
         #orientamento RAS
         Orientationd(keys=["image"], axcodes="RAS"),
+        #padding/crop a 256^3
+        ResizeWithPadOrCropd(
+            keys=["image"],
+            spatial_size=(256,256,256),
+            mode="constant",
+            constant_values=0,
+        ),
         #normalizzazione intensità tra 0 e 1
         ScaleIntensityRangePercentilesd(
             keys=["image"],
