@@ -118,110 +118,115 @@ def setup_optimizers(autoencoder:torch.nn.Module, discriminator:torch.nn.Module,
     return optimizer_g, optimizer_d
 
 def train_one_epoch(
-    epoch:int,
-    autoencoder:torch.nn.Module,
-    discriminator:torch.nn.Module,
+    epoch,
+    autoencoder,
+    discriminator,
     train_loader,
-    optimizer_g:torch.optim.Optimizer,
-    optimizer_d:torch.optim.Optimizer,
+    optimizer_g,
+    optimizer_d,
     l1_loss,
     perceptual_loss,
     adv_loss,
-    scaler_g:GradScaler,
-    device:torch.device,
-    kl_weight:float,
-    perceptual_weight:float,
-    adv_weight:float,
-    warm_up_epochs:int,
-)->dict:
-    """
-    Train su singola epoca. Due parti:
-    1) Autoencoder: minimizza recon + KL + perceptual + adv
-    2) Discriminator: massimizza la distinzione tra reale/fake
-    """
+    scaler_g,
+    device,
+    kl_weight,
+    perceptual_weight,
+    adv_weight,
+    warm_up_epochs,
+):
+
     autoencoder.train()
     discriminator.train()
 
-    #accumulatori loss per logging
     epoch_recon_loss=0.0
     epoch_gen_loss=0.0
     epoch_disc_loss=0.0
     epoch_kl_loss=0.0
 
-    #barra dei progressi
-    progress_bar=tqdm(
-        enumerate(train_loader),
-        total=len(train_loader),
-        desc=f"Epoch {epoch}",
-        ncols=100,
-    )
+    progress_bar=tqdm(enumerate(train_loader),
+                        total=len(train_loader),
+                        desc=f"Epoch {epoch}",
+                        ncols=100)
 
     for step, batch in progress_bar:
+
         images=batch["image"].to(device)
-        #Autoencoder
+
         optimizer_g.zero_grad(set_to_none=True)
+
         with autocast("cuda", enabled=True):
-            #forward pass
+
             reconstruction, z_mu, z_sigma=autoencoder(images)
-            #ricostruzione L1 loss
             recon_loss=l1_loss(reconstruction.float(), images.float())
-            #KL divergence
+
             eps=1e-10
             kl_loss=0.5*(
-                z_mu.pow(2)+z_sigma.pow(2)-torch.log(z_sigma.pow(2)+eps)-1
+                z_mu.pow(2)
+                + z_sigma.pow(2)
+                - torch.log(z_sigma.pow(2) + eps)
+                - 1
             )
+
             kl_loss=kl_loss.mean()
-            #Perceptual loss
-            p_loss=perceptual_loss(
-                reconstruction.float(), images.float(),
-            )
 
-            #loss totale per autoencoder
-            loss_g=recon_loss+(kl_weight*kl_loss)+(perceptual_weight*p_loss)
+            p_loss=perceptual_loss(reconstruction.float(), images.float())
 
-            #aggiunta componente adversariale dopo warm up
+            loss_g=recon_loss + (kl_weight * kl_loss) + (perceptual_weight * p_loss)
+
             if epoch>=warm_up_epochs:
-                logits_fake=discriminator(reconstruction.contiguous().float())[-1]
+
+                fake_in=reconstruction.detach().clone().float()
+                logits_fake=discriminator(fake_in)[-1]
+
                 generator_loss=adv_loss(
                     logits_fake,
                     target_is_real=True,
                     for_discriminator=False,
                 )
-                loss_g+=adv_weight*generator_loss
+
+                loss_g +=adv_weight*generator_loss
+
                 if not torch.isnan(generator_loss):
                     epoch_gen_loss+=generator_loss.item()
 
-        #NaN guard - salta lo step se loss esplode
         if torch.isnan(loss_g) or torch.isinf(loss_g):
-            print(f"[WARNING] NaN/Inf in loss_g epoch {epoch} step {step}, skip")
             optimizer_g.zero_grad(set_to_none=True)
             continue
-        
-        #backward pass
+
         scaler_g.scale(loss_g).backward()
         scaler_g.unscale_(optimizer_g)
         torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=1.0)
         scaler_g.step(optimizer_g)
         scaler_g.update()
 
-        #Discriminator --> solo dopo warm up
         if epoch>=warm_up_epochs and step%2==0:
             optimizer_d.zero_grad(set_to_none=True)
-            
-            logits_fake=discriminator(reconstruction.contiguous().detach().float())[-1]
-            logits_fake=torch.clamp(logits_fake,-10,10)
-            loss_d_fake=adv_loss(logits_fake, target_is_real=False, for_discriminator=True)
 
-            logits_real=discriminator(images.contiguous().detach().float())[-1]
-            logits_real=torch.clamp(logits_real,-10,10)
-            loss_d_real=adv_loss(logits_real, target_is_real=True, for_discriminator=True)
+            fake_in=reconstruction.detach().clone().float()
+            real_in=images.detach().clone().float()
 
-            discriminator_loss=(loss_d_fake+loss_d_real)*0.5
+            logits_fake=discriminator(fake_in)[-1]
+            logits_fake=torch.clamp(logits_fake, -10, 10)
+
+            loss_d_fake=adv_loss(
+                logits_fake,
+                target_is_real=False,
+                for_discriminator=True,
+            )
+
+            logits_real=discriminator(real_in)[-1]
+            logits_real=torch.clamp(logits_real, -10, 10)
+
+            loss_d_real=adv_loss(
+                logits_real,
+                target_is_real=True,
+                for_discriminator=True,
+            )
+
+            discriminator_loss=0.5*(loss_d_fake + loss_d_real)
             loss_d=adv_weight*discriminator_loss
 
-            #NaN guard - salta lo step se loss esplode
             if torch.isnan(loss_d) or torch.isinf(loss_d):
-                print(f"[WARNING] NaN/Inf in loss_g epoch {epoch} step {step}, skip")
                 optimizer_d.zero_grad(set_to_none=True)
                 continue
 
@@ -231,25 +236,22 @@ def train_one_epoch(
 
             epoch_disc_loss+=discriminator_loss.item()
 
-
-        #accumula loss
         epoch_recon_loss+=recon_loss.item()
         epoch_kl_loss+=kl_loss.item()
 
-        #aggiornamento progress bar
         progress_bar.set_postfix({
             "recon":f"{epoch_recon_loss/(step+1):.4f}",
             "kl":f"{epoch_kl_loss/(step+1):.4f}",
             "disc":f"{epoch_disc_loss/(step+1):.4f}",
         })
-    
-    #calcola medie per epoca
+
     n_steps=len(train_loader)
-    return{
-        "recon_loss": epoch_recon_loss/n_steps,
-        "kl_loss": epoch_kl_loss/n_steps,
-        "gen_loss": epoch_gen_loss/n_steps,
-        "disc_loss": epoch_disc_loss/n_steps,
+
+    return {
+        "recon_loss": epoch_recon_loss / n_steps,
+        "kl_loss": epoch_kl_loss / n_steps,
+        "gen_loss": epoch_gen_loss / n_steps,
+        "disc_loss": epoch_disc_loss / n_steps,
     }
 
 def validate(
