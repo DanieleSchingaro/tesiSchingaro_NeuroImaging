@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:4
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00
+#SBATCH --time=200:00:00
 
 source /mnt/data/home-ubuntu/work/medical-3D-Rflow-Maisi-Schingaro/.venv/bin/activate
 cd /mnt/data/home-ubuntu/work/medical-3D-Rflow-Maisi-Schingaro
@@ -17,6 +17,7 @@ echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
 echo "GPU disponibili: $(nvidia-smi --list-gpus | wc -l)"
 
-python3 -m src.training.train_vae
+MASTER_PORT=$((29000 + RANDOM % 2000))
+torchrun --nproc_per_node=4 --master_port=$MASTER_PORT -m src.training.train_vae
 
 echo "End: $(date)"

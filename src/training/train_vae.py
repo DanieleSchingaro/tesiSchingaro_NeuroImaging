@@ -11,6 +11,7 @@ import torch
 from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
@@ -21,11 +22,19 @@ from monai.utils import set_determinism
 from src.data.dataset import setup_dataloaders
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.distributed as dist
+from contextlib import nullcontext
 
 def load_config(config_path:str)->dict:
     """Carica file di configurazione json"""
     with open(config_path, "r") as f:
         return json.load(f)
+
+def setup_ddp():
+    dist.init_process_group(backend="nccl")
+    local_rank=int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    return local_rank
 
 def setup_models(config:dict, device:torch.device):
     """
@@ -62,10 +71,7 @@ def setup_models(config:dict, device:torch.device):
     discriminator=discriminator.to(device)
 
     #distribuzione sulle 4 GPU disponibili
-    if torch.cuda.device_count()>1:
-        print(f"Uso {torch.cuda.device_count()} GPU con DataParallel")
-        autoencoder=torch.nn.DataParallel(autoencoder)
-        discriminator=torch.nn.DataParallel(discriminator)
+    print(f"GPUs disponibili: {torch.cuda.device_count()}")
     
     return autoencoder,discriminator
 
@@ -182,7 +188,8 @@ def train_one_epoch(
                     for_discriminator=False,
                 )
                 loss_g+=adv_weight*generator_loss
-                epoch_gen_loss+=generator_loss.item()
+                if not torch.isnan(generator_loss):
+                    epoch_gen_loss+=generator_loss.item()
 
         #NaN guard - salta lo step se loss esplode
         if torch.isnan(loss_g) or torch.isinf(loss_g):
@@ -305,12 +312,12 @@ def save_checkpoint(
     #estrazione del modello da DataParallel se necessario
     autoencoder_state=(
         autoencoder.module.state_dict()
-        if isinstance(autoencoder, torch.nn.DataParallel)
+        if isinstance(autoencoder, torch.nn.parallel.DistributedDataParallel)
         else autoencoder.state_dict()
     )
     discriminator_state=(
         discriminator.module.state_dict()
-        if isinstance(discriminator, torch.nn.DataParallel)
+        if isinstance(discriminator, torch.nn.parallel.DistributedDataParallel)
         else discriminator.state_dict()
     )
 
@@ -394,7 +401,6 @@ def save_learning_curves(
     print(f"Learning curves salvate in {curve_path}")
     return curve_path
 
-
 def main():
     """
     Flusso:
@@ -428,78 +434,98 @@ def main():
     splits_path=config_env["json_data_list"]
 
     #setup device e seed
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    local_rank=setup_ddp()
+    device=torch.device(f"cuda:{local_rank}")
     print(f"Device: {device}")
     print(f"GPU disponibili: {torch.cuda.device_count()}")
     set_determinism(seed=42)
 
-    #setup MLFlow
-    mlflow.set_experiment("VAE_training")
-    with mlflow.start_run(run_name=f"vae_epoch{n_epochs}_lr{lr}"):
-        #log parametri
+    rank = dist.is_initialized() and dist.get_rank() or 0
+    is_main_process=rank==0
+
+    if is_main_process:
+        mlflow.set_experiment("VAE_training")
+        mlflow.start_run(run_name=f"vae_epoch{n_epochs}_lr{lr}")
+
         mlflow.log_params({
-            "lr":lr,
-            "n_epoch":n_epochs,
-            "batch_size":batch_size,
-            "patch_size":str(patch_size),
-            "kl_weight":kl_weight,
-            "perceptual_weight":perceptual_weight,
-            "adv_weight":adv_weight,
-            "warm_up_epochs":warm_up_epochs,
-            "n_gpus":torch.cuda.device_count(),
+            "lr": lr,
+            "n_epoch": n_epochs,
+            "batch_size": batch_size,
+            "patch_size": str(patch_size),
+            "kl_weight": kl_weight,
+            "perceptual_weight": perceptual_weight,
+            "adv_weight": adv_weight,
+            "warm_up_epochs": warm_up_epochs,
+            "n_gpus": torch.cuda.device_count(),
         })
 
-        #inizializzazione parametri
+        mlflow_run=None
+    else:
+        mlflow_run=nullcontext()
+
+    with mlflow_run if mlflow_run is not None else nullcontext():
+
+        #inizializzazione modelli
         autoencoder, discriminator=setup_models(config_vae, device)
+
+        autoencoder=torch.nn.parallel.DistributedDataParallel(
+            autoencoder,
+            device_ids=[local_rank],
+            output_device=local_rank
+        )
+
+        discriminator=torch.nn.parallel.DistributedDataParallel(
+            discriminator,
+            device_ids=[local_rank],
+            output_device=local_rank
+        )
+
         #caricamento checkpoint per fine-tuning se finetune=True
         if config_env.get("finetune", False):
             ckpt_path=config_env.get("trained_autoencoder_path")
             if ckpt_path and os.path.exists(ckpt_path):
                 checkpoint=torch.load(ckpt_path, map_location=device)
-                if isinstance(autoencoder, torch.nn.DataParallel):
-                    autoencoder.module.load_state_dict(checkpoint["autoencoder_state_dict"])
-                else:
-                    autoencoder.load_state_dict(checkpoint["autoencoder_state_dict"])
+                autoencoder.module.load_state_dict(checkpoint["autoencoder_state_dict"])
                 print(f"Checkpoint caricato da {ckpt_path}")
-        #inizializzazione loss
-        l1_loss, perceptual_loss, adv_loss= setup_losses(device)
-        #inizializzazione ottimizzatori
-        optimizer_g, optimizer_d= setup_optimizers(autoencoder, discriminator, lr)
-        #LR scheduler come in NV-Generate
+
+        #loss
+        l1_loss, perceptual_loss, adv_loss=setup_losses(device)
+
+        #optimizer
+        optimizer_g, optimizer_d=setup_optimizers(autoencoder, discriminator, lr)
+
         scheduler_g=CosineAnnealingLR(
             optimizer_g, T_max=n_epochs, eta_min=1e-6
         )
-        #scaler per mixed precision
+
         scaler_g=GradScaler("cuda")
 
-        #accumulatori learning curves
         all_train_recon=[]
         all_val_recon=[]
         all_train_gen=[]
         all_train_disc=[]
 
-        #creazione dataloaders
-        config_data={
-            "patch_size":list(patch_size),
-            "batch_size":batch_size,
-            "cache_rate":cache_rate,
-            "num_workers":num_workers,
-            "random_aug":config_vae["data_option"]["random_aug"]
+        config_data = {
+            "patch_size": list(patch_size),
+            "batch_size": batch_size,
+            "cache_rate": cache_rate,
+            "num_workers": num_workers,
+            "random_aug": config_vae["data_option"]["random_aug"]
         }
+
         train_loader, val_loader, _=setup_dataloaders(
-            config=config_data, 
+            config=config_data,
             splits_path=splits_path,
         )
 
         print(f"Train: {len(train_loader.dataset)} immagini")
         print(f"Val: {len(val_loader.dataset)} immagini")
 
-        #training loop
         best_val_loss=float("inf")
         total_start=time.time()
 
         for epoch in range(n_epochs):
-            #training epoca
+
             train_metrics=train_one_epoch(
                 epoch=epoch,
                 autoencoder=autoencoder,
@@ -518,21 +544,20 @@ def main():
                 warm_up_epochs=warm_up_epochs,
             )
 
-            #log metriche training su MLFlow
-            mlflow.log_metrics({
-                "train_recon_loss": train_metrics["recon_loss"],
-                "train_kl_loss": train_metrics["kl_loss"],
-                "train_gen_loss": train_metrics["gen_loss"],
-                "train_disc_loss": train_metrics["disc_loss"],
-            }, step=epoch) 
+            if is_main_process:
+                mlflow.log_metrics({
+                    "train_recon_loss": train_metrics["recon_loss"],
+                    "train_kl_loss": train_metrics["kl_loss"],
+                    "train_gen_loss": train_metrics["gen_loss"],
+                    "train_disc_loss": train_metrics["disc_loss"],
+                }, step=epoch)
 
-            #accumulatori per le curve
             all_train_recon.append(train_metrics["recon_loss"])
             all_train_gen.append(train_metrics["gen_loss"])
-            all_train_disc.append(train_metrics["disc_loss"])  
+            all_train_disc.append(train_metrics["disc_loss"])
 
-            #validazione ogni val_interval epoche
-            if (epoch+1) % val_interval==0:
+            if (epoch + 1) % val_interval == 0:
+
                 val_metrics=validate(
                     epoch=epoch,
                     autoencoder=autoencoder,
@@ -543,25 +568,24 @@ def main():
                     perceptual_weight=perceptual_weight,
                 )
 
-                #log metriche validazione su MLFlow
-                mlflow.log_metrics({
-                    "val_recon_loss":val_metrics["val_recon_loss"],
-                    "val_p_loss": val_metrics["val_p_loss"],
+                if is_main_process:
+                    mlflow.log_metrics({
+                        "val_recon_loss": val_metrics["val_recon_loss"],
+                        "val_p_loss": val_metrics["val_p_loss"],
+                    }, step=epoch)
 
-                }, step=epoch)
+                print(
+                    f"Epoch {epoch+1}/{n_epochs} | "
+                    f"train_recon: {train_metrics['recon_loss']:.4f} | "
+                    f"val_recon: {val_metrics['val_recon_loss']:.4f}"
+                )
 
-                print(f"Epoch {epoch+1}/{n_epochs} | "
-                      f"train_recon: {train_metrics['recon_loss']:.4f} | "
-                      f"val_recon: {val_metrics['val_recon_loss']:.4f}")
-
-                #accumula val loss
                 all_val_recon.append(val_metrics["val_recon_loss"])
 
-                #salavataggio miglior modello
-                is_best=val_metrics["val_recon_loss"]<best_val_loss
+                is_best=val_metrics["val_recon_loss"] < best_val_loss
                 if is_best:
                     best_val_loss=val_metrics["val_recon_loss"]
-                
+
                 save_checkpoint(
                     epoch=epoch,
                     autoencoder=autoencoder,
@@ -572,20 +596,19 @@ def main():
                     save_dir=save_dir,
                     is_best=is_best,
                 )
-            
+
             scheduler_g.step()
-            mlflow.log_metric("lr", scheduler_g.get_last_lr()[0], step=epoch)
-        
-        
-        #tempo totale del training
+
+            if is_main_process:
+                mlflow.log_metric("lr", scheduler_g.get_last_lr()[0], step=epoch)
+
         total_time=time.time()-total_start
         print(f"Training completato in {total_time/3600:.2f} ore")
 
-        #log artifact finali su MLFlow
-        mlflow.log_metric("total_time_hours", total_time/3600)
-        mlflow.log_artifact(os.path.join(save_dir, "autoencoder_best.pt"))
+        if is_main_process:
+            mlflow.log_metric("total_time_hours", total_time/3600)
+            mlflow.log_artifact(os.path.join(save_dir, "autoencoder_best.pt"))
 
-        #salvataggio e log delle learning curves 
         curve_path=save_learning_curves(
             train_recon_loss=all_train_recon,
             val_recon_loss=all_val_recon,
@@ -595,8 +618,12 @@ def main():
             val_interval=val_interval,
             n_epochs=n_epochs,
         )
-        mlflow.log_artifact(curve_path)
-    
+
+        if is_main_process:
+            mlflow.log_artifact(curve_path)
+            mlflow.end_run()
+
+    dist.destroy_process_group()
     print("Training VAE completato")
 
 if __name__=="__main__":

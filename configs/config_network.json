@@ -58,8 +58,8 @@
         "use_flash_attention": true,
         "include_top_region_index_input": "@include_body_region",
         "include_bottom_region_index_input": "@include_body_region",
-        "include_spacing_input": true,
-        "num_class_embeds": 128,
+        "include_spacing_input": false,
+        "num_class_embeds": null,
         "resblock_updown": true,
         "include_fc": true
     },

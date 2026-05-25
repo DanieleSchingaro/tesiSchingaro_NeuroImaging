@@ -1,5 +1,3 @@
-#src/data/dataset.py
-
 """
 Dataset e DataLoader per MRI cerebrali
 Caricamento immagini NIfTI da multiple cartelle e applicazione transforms MONAI
@@ -9,9 +7,11 @@ import os
 import json
 from pathlib import Path
 from typing import Optional
-
 import torch
-from monai.data import CacheDataset, DataLoader
+from torch.utils.data import DataLoader
+import torch.distributed as dist
+from torch.utils.data.distributed import DistributedSampler
+from monai.data import CacheDataset
 from monai.transforms import (
     Compose,
     DivisiblePadd,
@@ -68,20 +68,15 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
     Transforms MONAI per training e validazione su MRI T1 skull-stripped.
     """
     common_transforms=[
-        #carica il file NIfTI dal path
         LoadImaged(keys=["image"]),
-        #impostiamo formato (C,H,W,D)
         EnsureChannelFirstd(keys=["image"]),
-        #orientamento RAS
         Orientationd(keys=["image"], axcodes="RAS"),
-        #padding/crop a 256^3
         ResizeWithPadOrCropd(
             keys=["image"],
             spatial_size=(256,256,256),
             mode="constant",
             constant_values=0,
         ),
-        #normalizzazione intensità tra 0 e 1
         ScaleIntensityRangePercentilesd(
             keys=["image"],
             lower=0.0,
@@ -93,7 +88,6 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
     ]
 
     if is_train:
-        #augmentazioni MRI
         aug_transforms=[]
         if random_aug:
             aug_transforms=[
@@ -104,10 +98,10 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
                 RandFlipd(keys=["image"], prob=0.5, spatial_axis=0),
                 RandFlipd(keys=["image"], prob=0.5, spatial_axis=1),
                 RandFlipd(keys=["image"], prob=0.5, spatial_axis=2),
-                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0, 1)),
-                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(1, 2)),
-                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0, 2)),
-                RandScaleIntensityd(keys=["image"], prob=0.3, factors=(0.9, 1.1)),
+                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0,1)),
+                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(1,2)),
+                RandRotate90d(keys=["image"], prob=0.5, spatial_axes=(0,2)),
+                RandScaleIntensityd(keys=["image"], prob=0.3, factors=(0.9,1.1)),
                 RandShiftIntensityd(keys=["image"], prob=0.3, offsets=0.05),
                 RandZoomd(
                     keys=["image"],
@@ -127,8 +121,7 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
                     mode="bilinear",
                 ),
             ]
-        
-        #pad + crop casuale
+
         crop_transforms=[
             SpatialPadd(keys=["image"], spatial_size=patch_size),
             RandSpatialCropd(
@@ -141,10 +134,8 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
 
         final_transforms=[EnsureTyped(keys=["image"], dtype=output_dtype)]
         return Compose(common_transforms+aug_transforms+crop_transforms+final_transforms)
-    
+
     else:
-        #per validazione pad a dimensioni divisibili per k
-        #oppure crop centrale se val_patch_size è specificato
         if val_patch_size is None:
             val_crop=[DivisiblePadd(keys=["image"], k=k)]
         else:
@@ -152,7 +143,7 @@ def get_transforms(patch_size:tuple=(64,64,64), val_patch_size:Optional[tuple]=N
                 keys=["image"],
                 spatial_size=val_patch_size,
             )]
-        
+
         final_transforms=[EnsureTyped(keys=["image"], dtype=output_dtype)]
         return Compose(common_transforms+val_crop+final_transforms)
 
@@ -188,15 +179,15 @@ def save_split(train_files:list, val_files:list, test_files:list, output_path:st
         "validation":val_files,
         "test":test_files,
     }
-    with open(output_path, "w") as f:
-        json.dump(splits, f, indent=2)
+    with open(output_path,"w") as f:
+        json.dump(splits,f,indent=2)
     print(f"Split salvati in {output_path}")
 
 def load_splits(splits_path:str)->tuple[list,list,list]:
     """
     Carica gli split da un file json esistente.
     """
-    with open(splits_path, "r") as f:
+    with open(splits_path,"r") as f:
         splits=json.load(f)
     return splits["training"], splits["validation"], splits["test"]
 
@@ -205,10 +196,14 @@ def create_dataloader(files:list[dict], patch_size:tuple=(64,64,64), val_patch_s
     Creazione DataLoader MONAI con CacheDataset.
     CacheDataset carica e preprocessa i dati una sola volta accelerando il training
     """
-    transforms=get_transforms(patch_size=patch_size, val_patch_size=val_patch_size, is_train=is_train, random_aug=random_aug, k=k,)
-    
-    #cache_rate=0 -> nessuna cache
-    #cache_rate=1 -> tutto in memoria
+    transforms=get_transforms(
+        patch_size=patch_size,
+        val_patch_size=val_patch_size,
+        is_train=is_train,
+        random_aug=random_aug,
+        k=k,
+    )
+
     dataset=CacheDataset(
         data=files,
         transform=transforms,
@@ -216,52 +211,111 @@ def create_dataloader(files:list[dict], patch_size:tuple=(64,64,64), val_patch_s
         num_workers=num_workers,
     )
 
-    #shuffle per il training
+    #FIX DDP SAFE (shuffle solo training + no shuffle in val/test)
+    shuffle_flag = is_train and (not dist.is_available() or not dist.is_initialized())
+
     dataloader=DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=is_train,
+        shuffle=shuffle_flag,
         num_workers=num_workers,
-        pin_memory=True, #accelera trasferimento CPU->GPU
+        pin_memory=True,
         persistent_workers=True if num_workers>0 else False,
-        drop_last=True, #evita batch incompleti che causano errori
+        drop_last=True,
     )
 
     return dataloader
 
-def setup_dataloaders(config:dict, splits_path:str="data/splits/dataset.json",)->tuple[DataLoader, DataLoader, DataLoader]:
+def setup_dataloaders(
+    config:dict,
+    splits_path:str="data/splits/dataset.json",
+)->tuple:
+
     """
     Raccoglie i file, crea o carica gli splits e restituisce i tre DataLoader
     """
-    #controllo esistenza splits
+
+    import torch.distributed as dist
+    from torch.utils.data.distributed import DistributedSampler
+
+    # controllo esistenza splits
     if os.path.exists(splits_path):
         print(f"Splits esistenti caricati da {splits_path}")
-        train_files, val_files, test_files=load_splits(splits_path)
+        train_files, val_files, test_files = load_splits(splits_path)
     else:
         print(f"Creazione nuovi splits")
-        files=get_file_list(DATASET_DIRS)
-        train_files, val_files, test_files=split_dataset(files)
+        files = get_file_list(DATASET_DIRS)
+        train_files, val_files, test_files = split_dataset(files)
         save_split(train_files, val_files, test_files, splits_path)
 
-    #parametri del config
-    patch_size=tuple(config.get("patch_size", [64,64,64]))
-    val_patch_size=config.get("val_patch_size", None)
+    # parametri config
+    patch_size = tuple(config.get("patch_size", [64, 64, 64]))
+    val_patch_size = config.get("val_patch_size", None)
     if val_patch_size is not None:
-        val_patch_size=tuple(val_patch_size)
-    batch_size=config.get("batch_size", 1)
-    cache_rate=config.get("cache_rate", 0.5)
-    num_workers=config.get("num_workers", 4)
-    random_aug=config.get("random_aug", True)
+        val_patch_size = tuple(val_patch_size)
 
-    #creazione dataloader
+    batch_size = config.get("batch_size", 1)
+    cache_rate = config.get("cache_rate", 0.5)
+    num_workers = config.get("num_workers", 4)
+    random_aug = config.get("random_aug", True)
+
+    is_distributed = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_distributed else 0
+    world_size = dist.get_world_size() if is_distributed else 1
+
+    train_sampler=DistributedSampler(
+        train_files,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=True,
+        seed=42,
+    ) if is_distributed else None
+
+    val_sampler=DistributedSampler(
+        val_files,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    ) if is_distributed else None
+
+    test_sampler=DistributedSampler(
+        test_files,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=False,
+    ) if is_distributed else None
+
     train_loader=create_dataloader(
-        train_files, patch_size=patch_size, val_patch_size=None, batch_size=batch_size, is_train=True, random_aug=random_aug, cache_rate=cache_rate, num_workers=num_workers,
+        train_files,
+        patch_size=patch_size,
+        val_patch_size=None,
+        batch_size=batch_size,
+        is_train=True,
+        random_aug=random_aug,
+        cache_rate=cache_rate,
+        num_workers=num_workers, 
     )
+
     val_loader=create_dataloader(
-        val_files, patch_size=patch_size, val_patch_size=val_patch_size, batch_size=batch_size, is_train=False, random_aug=False, cache_rate=0.0, num_workers=num_workers,
+        val_files,
+        patch_size=patch_size,
+        val_patch_size=val_patch_size,
+        batch_size=batch_size,
+        is_train=False,
+        random_aug=False,
+        cache_rate=0.0,
+        num_workers=num_workers, 
     )
+
     test_loader=create_dataloader(
-        test_files, patch_size=patch_size, val_patch_size=val_patch_size, batch_size=batch_size, is_train=False, random_aug=False, cache_rate=0.0, num_workers=num_workers,
+        test_files,
+        patch_size=patch_size,
+        val_patch_size=val_patch_size,
+        batch_size=batch_size,
+        is_train=False,
+        random_aug=False,
+        cache_rate=0.0,
+        num_workers=num_workers,    
     )
 
     return train_loader, val_loader, test_loader
