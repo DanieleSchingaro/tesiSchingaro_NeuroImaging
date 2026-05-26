@@ -143,19 +143,19 @@ def train_one_epoch(
     epoch_disc_loss=0.0
     epoch_kl_loss=0.0
 
+    #ranngo per barra tqdm --> solo rank 0 == solo una barra
+    rank=dist.get_rank() if dist.is_initialized() else 0
+
     progress_bar=tqdm(enumerate(train_loader),
                         total=len(train_loader),
                         desc=f"Epoch {epoch}",
-                        ncols=100)
+                        ncols=100,
+                        disable=rank!=0,)
 
     for step, batch in progress_bar:
-
         images=batch["image"].to(device)
-
         optimizer_g.zero_grad(set_to_none=True)
-
         with autocast("cuda", enabled=True):
-
             reconstruction, z_mu, z_sigma=autoencoder(images)
             recon_loss=l1_loss(reconstruction.float(), images.float())
 
@@ -174,16 +174,13 @@ def train_one_epoch(
             loss_g=recon_loss + (kl_weight * kl_loss) + (perceptual_weight * p_loss)
 
             if epoch>=warm_up_epochs:
-
-                fake_in=reconstruction.detach().clone().float()
+                fake_in=reconstruction.float().contiguous()
                 logits_fake=discriminator(fake_in)[-1]
-
                 generator_loss=adv_loss(
                     logits_fake,
                     target_is_real=True,
                     for_discriminator=False,
                 )
-
                 loss_g +=adv_weight*generator_loss
 
                 if not torch.isnan(generator_loss):
@@ -201,9 +198,12 @@ def train_one_epoch(
 
         if epoch>=warm_up_epochs and step%2==0:
             optimizer_d.zero_grad(set_to_none=True)
+            fake_in=reconstruction.detach().float().contiguous()
+            real_in=images.detach().float().contiguous()
 
-            fake_in=reconstruction.detach().clone().float()
-            real_in=images.detach().clone().float()
+            with torch.no_grad():
+                fake_in=fake_in.clone()
+                real_in=real_in.clone()
 
             logits_fake=discriminator(fake_in)[-1]
             logits_fake=torch.clamp(logits_fake, -10, 10)
@@ -271,11 +271,15 @@ def validate(
     val_recon_loss=0.0
     val_p_loss=0.0
 
+    #ranngo per barra tqdm --> solo rank 0 == solo una barra
+    rank=dist.get_rank() if dist.is_initialized() else 0
+
     with torch.no_grad():
         for step,batch in enumerate(tqdm(
             val_loader,
             desc=f"Validation epoch {epoch}",
             ncols=100,
+            disable=rank!=0,
         )):
             images=batch["image"].to(device)
             with autocast("cuda", enabled=True):
