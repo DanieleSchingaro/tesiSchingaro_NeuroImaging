@@ -22,7 +22,8 @@ from monai.transforms import(
     ScaleIntensityRangePercentilesd,
     EnsureTyped,
 )
-from generative.networks.nets import AutoencoderKL
+from src.data.transforms import get_encoding_transforms
+from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKlMaisi
 
 def setup_logging()->logging.Logger:
     """
@@ -73,29 +74,6 @@ def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKL:
         param.requires_grad=False
     
     return autoencoder
-
-def get_encoding_transforms()->Compose:
-    """
-    Transforms per il preprocessing prima dell'encoding.
-    Utilizziamo le stesse transforms usate durante il training del VAE
-    ma senza augmentazioni e crop.
-    """
-    return Compose([
-        LoadImaged(keys=["image"]),
-        EnsureChannelFirstd(keys=["image"]),
-        #orientamento RAS
-        Orientationd(keys=["image"], axcodes="RAS"),
-        #normalizzazione identica al training
-        ScaleIntensityRangePercentilesd(
-            keys=["image"],
-            lower=0.0,
-            upper=99.5,
-            b_min=0.0,
-            b_max=1.0,
-            clip=True,
-        ),
-        EnsureTyped(keys=["image"], dtype=torch.float32),
-    ])
 
 def encode_volume(
     image_path:str,

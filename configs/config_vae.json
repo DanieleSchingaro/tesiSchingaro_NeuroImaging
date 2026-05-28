@@ -20,7 +20,7 @@
         "cache_rate": 0.0,
         "amp": true,
         "n_epochs": 300,
-        "num_workers": 2,
+        "num_workers": 4,
         "warm_up_epochs": 5
     },
     "paths": {

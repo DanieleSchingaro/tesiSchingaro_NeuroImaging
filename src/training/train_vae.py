@@ -15,7 +15,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
-from generative.networks.nets import AutoencoderKL, PatchDiscriminator
+from generative.networks.nets import PatchDiscriminator
+from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKlMaisi
 from monai.losses import PerceptualLoss
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.utils import set_determinism
@@ -43,22 +44,23 @@ def setup_models(config:dict, device:torch.device):
     PatchDiscriminator: discriminatore per la loss.
     """
 
-    #VAE --> config_network.json per architettura
-    autoencoder=AutoencoderKL(
+    autoencoder=AutoencoderKlMaisi(
         spatial_dims=3,
         in_channels=1,
         out_channels=1,
         latent_channels=4,
-        num_channels=(64,128,256),
-        num_res_blocks=(2,2,2),
+        num_channels=(64, 128, 256),
+        num_res_blocks=(2, 2, 2),
         norm_num_groups=32,
         norm_eps=1e-6,
-        attention_levels=(False,False,False),
+        attention_levels=(False, False, False),
         with_encoder_nonlocal_attn=False,
         with_decoder_nonlocal_attn=False,
+        use_checkpointing=True,   # ← gradient checkpointing per 256³
+        num_splits=4,             # ← split per efficienza memoria
+        dim_split=1,
     )
 
-    #PatchDiscriminator
     discriminator=PatchDiscriminator(
         spatial_dims=3,
         num_layers_d=3,
@@ -70,10 +72,26 @@ def setup_models(config:dict, device:torch.device):
     autoencoder=autoencoder.to(device)
     discriminator=discriminator.to(device)
 
-    #distribuzione sulle 4 GPU disponibili
-    print(f"GPUs disponibili: {torch.cuda.device_count()}")
-    
-    return autoencoder,discriminator
+    local_rank=int(os.environ.get("LOCAL_RANK", 0))
+
+    if dist.is_available() and dist.is_initialized():
+        print(f"[rank{local_rank}] Uso DDP")
+        autoencoder=torch.nn.parallel.DistributedDataParallel(
+            autoencoder,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False,
+        )
+        discriminator=torch.nn.parallel.DistributedDataParallel(
+            discriminator,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False,
+        )
+    else:
+        print(f"Uso singola GPU/CPU")
+
+    return autoencoder, discriminator
 
 def setup_losses(device:torch.device):
     """
@@ -196,44 +214,36 @@ def train_one_epoch(
         scaler_g.step(optimizer_g)
         scaler_g.update()
 
-        if epoch>=warm_up_epochs and step%2==0:
+        if epoch >= warm_up_epochs and step % 2==0:
             optimizer_d.zero_grad(set_to_none=True)
-            fake_in=reconstruction.detach().float().contiguous()
-            real_in=images.detach().float().contiguous()
 
-            with torch.no_grad():
-                fake_in=fake_in.clone()
-                real_in=real_in.clone()
+            # .detach().clone() invece di solo .detach()
+            recon_detached=reconstruction.detach().clone().float()
+            images_detached=images.detach().clone().float()
 
-            logits_fake=discriminator(fake_in)[-1]
+            logits_fake=discriminator(recon_detached.contiguous())[-1]
             logits_fake=torch.clamp(logits_fake, -10, 10)
+            loss_d_fake=adv_loss(logits_fake, target_is_real=False, for_discriminator=True)
 
-            loss_d_fake=adv_loss(
-                logits_fake,
-                target_is_real=False,
-                for_discriminator=True,
-            )
-
-            logits_real=discriminator(real_in)[-1]
+            logits_real=discriminator(images_detached.contiguous())[-1]
             logits_real=torch.clamp(logits_real, -10, 10)
+            loss_d_real=adv_loss(logits_real, target_is_real=True, for_discriminator=True)
 
-            loss_d_real=adv_loss(
-                logits_real,
-                target_is_real=True,
-                for_discriminator=True,
-            )
-
-            discriminator_loss=0.5*(loss_d_fake + loss_d_real)
+            discriminator_loss=(loss_d_fake + loss_d_real)*0.5
             loss_d=adv_weight*discriminator_loss
 
             if torch.isnan(loss_d) or torch.isinf(loss_d):
+                print(f"[WARNING] NaN discriminator epoch {epoch} step {step}")
                 optimizer_d.zero_grad(set_to_none=True)
                 continue
 
             loss_d.backward()
-            torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+                discriminator.module.parameters() if hasattr(discriminator, 'module')
+                else discriminator.parameters(),
+                max_norm=1.0
+            )
             optimizer_d.step()
-
             epoch_disc_loss+=discriminator_loss.item()
 
         epoch_recon_loss+=recon_loss.item()
@@ -416,6 +426,13 @@ def main():
     4)Loop di training con MLFlow
     5)Salvataggio del migliore checkpoint
     """
+
+    local_rank=int(os.environ.get("LOCAL_RANK", 0))
+    torch.cuda.set_device(local_rank)
+    device=torch.device(f"cuda:{local_rank}")
+
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
 
     #caricamento configurazioni
     config_vae=load_config("configs/config_vae.json")
@@ -629,7 +646,8 @@ def main():
             mlflow.log_artifact(curve_path)
             mlflow.end_run()
 
-    dist.destroy_process_group()
+    if dist.is_initialized():
+        dist.destroy_process_group()
     print("Training VAE completato")
 
 if __name__=="__main__":
