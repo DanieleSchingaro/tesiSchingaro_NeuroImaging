@@ -72,6 +72,7 @@ def setup_models(config:dict, device:torch.device):
         num_channels=32,
         in_channels=1,
         out_channels=1,
+        norm="INSTANCE",
     )
 
     autoencoder=autoencoder.to(device)
