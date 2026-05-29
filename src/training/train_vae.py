@@ -31,11 +31,16 @@ def load_config(config_path:str)->dict:
     with open(config_path, "r") as f:
         return json.load(f)
 
-def setup_ddp():
+def setup_ddp()->tuple[int, torch.device]:
+    """
+    Inizializza DDP con torchrun.
+    torchrun setta LOCAL_RANK, RANK, WORLD_SIZE automaticamente.
+    """
     dist.init_process_group(backend="nccl")
     local_rank=int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    return local_rank
+    device=torch.device(f"cuda:{local_rank}")
+    return local_rank, device
 
 def setup_models(config:dict, device:torch.device):
     """
@@ -431,9 +436,6 @@ def main():
     torch.cuda.set_device(local_rank)
     device=torch.device(f"cuda:{local_rank}")
 
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
-
     #caricamento configurazioni
     config_vae=load_config("configs/config_vae.json")
     config_env=load_config("configs/environment.json")
@@ -457,7 +459,7 @@ def main():
     splits_path=config_env["json_data_list"]
 
     #setup device e seed
-    local_rank=setup_ddp()
+    local_rank, device=setup_ddp()
     device=torch.device(f"cuda:{local_rank}")
     print(f"Device: {device}")
     print(f"GPU disponibili: {torch.cuda.device_count()}")
