@@ -85,13 +85,13 @@ def setup_models(config:dict, device:torch.device):
             autoencoder,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False,
+            find_unused_parameters=True,
         )
         discriminator=torch.nn.parallel.DistributedDataParallel(
             discriminator,
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False,
+            find_unused_parameters=True,
         )
     else:
         print(f"Uso singola GPU/CPU")
@@ -219,7 +219,7 @@ def train_one_epoch(
         scaler_g.step(optimizer_g)
         scaler_g.update()
 
-        if epoch >= warm_up_epochs and step % 2==0:
+        if epoch >= warm_up_epochs:
             optimizer_d.zero_grad(set_to_none=True)
 
             # .detach().clone() invece di solo .detach()
