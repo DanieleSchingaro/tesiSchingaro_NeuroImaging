@@ -166,7 +166,7 @@ def train_one_epoch(
     epoch_disc_loss=0.0
     epoch_kl_loss=0.0
 
-    #ranngo per barra tqdm --> solo rank 0 == solo una barra
+    #rango per barra tqdm --> solo rank 0 == solo una barra
     rank=dist.get_rank() if dist.is_initialized() else 0
 
     progress_bar=tqdm(enumerate(train_loader),
@@ -177,6 +177,8 @@ def train_one_epoch(
 
     for step, batch in progress_bar:
         images=batch["image"].to(device)
+
+        # ===== GENERATOR (autoencoder) =====
         optimizer_g.zero_grad(set_to_none=True)
         with autocast("cuda", enabled=True):
             reconstruction, z_mu, z_sigma=autoencoder(images)
@@ -196,9 +198,14 @@ def train_one_epoch(
 
             loss_g=recon_loss + (kl_weight * kl_loss) + (perceptual_weight * p_loss)
 
+            #componente adversariale dopo il warm up
             if epoch>=warm_up_epochs:
-                fake_in=reconstruction.float().contiguous()
-                logits_fake=discriminator(fake_in)[-1]
+                #discriminator in eval per NON aggiornare i running stats del BatchNorm
+                #durante la fase generator (evita inplace error con DDP)
+                discriminator.eval()
+                logits_fake=discriminator(reconstruction.float().contiguous())[-1]
+                discriminator.train()
+
                 generator_loss=adv_loss(
                     logits_fake,
                     target_is_real=True,
@@ -209,27 +216,32 @@ def train_one_epoch(
                 if not torch.isnan(generator_loss):
                     epoch_gen_loss+=generator_loss.item()
 
+        #NaN guard generator
         if torch.isnan(loss_g) or torch.isinf(loss_g):
             optimizer_g.zero_grad(set_to_none=True)
             continue
 
+        #backward + step generator
         scaler_g.scale(loss_g).backward()
         scaler_g.unscale_(optimizer_g)
         torch.nn.utils.clip_grad_norm_(autoencoder.parameters(), max_norm=1.0)
         scaler_g.step(optimizer_g)
         scaler_g.update()
 
+        # ===== DISCRIMINATOR =====
         if epoch >= warm_up_epochs:
             optimizer_d.zero_grad(set_to_none=True)
 
-            # .detach().clone() invece di solo .detach()
+            #tensori staccati dal grafo del generator + convertiti a tensori puri
             recon_detached=reconstruction.detach().clone().float().as_subclass(torch.Tensor)
             images_detached=images.detach().clone().float().as_subclass(torch.Tensor)
 
+            #logits su immagini false
             logits_fake=discriminator(recon_detached.contiguous())[-1]
             logits_fake=torch.clamp(logits_fake, -10, 10)
             loss_d_fake=adv_loss(logits_fake, target_is_real=False, for_discriminator=True)
 
+            #logits su immagini reali
             logits_real=discriminator(images_detached.contiguous())[-1]
             logits_real=torch.clamp(logits_real, -10, 10)
             loss_d_real=adv_loss(logits_real, target_is_real=True, for_discriminator=True)
@@ -237,11 +249,13 @@ def train_one_epoch(
             discriminator_loss=(loss_d_fake + loss_d_real)*0.5
             loss_d=adv_weight*discriminator_loss
 
+            #NaN guard discriminator
             if torch.isnan(loss_d) or torch.isinf(loss_d):
                 print(f"[WARNING] NaN discriminator epoch {epoch} step {step}")
                 optimizer_d.zero_grad(set_to_none=True)
                 continue
 
+            #backward + step discriminator (FP32, no scaler)
             loss_d.backward()
             torch.nn.utils.clip_grad_norm_(
                 discriminator.module.parameters() if hasattr(discriminator, 'module')
@@ -251,6 +265,7 @@ def train_one_epoch(
             optimizer_d.step()
             epoch_disc_loss+=discriminator_loss.item()
 
+        #accumulo loss per il logging
         epoch_recon_loss+=recon_loss.item()
         epoch_kl_loss+=kl_loss.item()
 
