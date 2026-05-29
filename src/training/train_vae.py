@@ -223,8 +223,8 @@ def train_one_epoch(
             optimizer_d.zero_grad(set_to_none=True)
 
             # .detach().clone() invece di solo .detach()
-            recon_detached=reconstruction.detach().clone().float()
-            images_detached=images.detach().clone().float()
+            recon_detached=reconstruction.detach().clone().float().as_subclass(torch.Tensor)
+            images_detached=images.detach().clone().float().as_subclass(torch.Tensor)
 
             logits_fake=discriminator(recon_detached.contiguous())[-1]
             logits_fake=torch.clamp(logits_fake, -10, 10)
