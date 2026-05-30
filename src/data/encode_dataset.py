@@ -14,14 +14,7 @@ from typing import Optional, Tuple
 import numpy as np 
 import torch
 from torch.amp import autocast
-from monai.transforms import(
-    Compose,
-    LoadImaged,
-    EnsureChannelFirstd,
-    Orientationd,
-    ScaleIntensityRangePercentilesd,
-    EnsureTyped,
-)
+from monai.transforms import Compose
 from src.data.transforms import get_encoding_transforms
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKlMaisi
 
@@ -36,13 +29,13 @@ def setup_logging()->logging.Logger:
     )
     return logging.getLogger("encode_dataset")
 
-def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKL:
+def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKlMaisi:
     """
     Carica il VAE dal checkpoint salvato durante il training.
     Il modello vien messo poi in modalità eval e frozen -
     durante l'encoding non aggiorniamo i pesi.
     """
-    autoencoder=AutoencoderKL(
+    autoencoder=AutoencoderKlMaisi(
         spatial_dims=3,
         in_channels=1,
         out_channels=1,
@@ -54,6 +47,9 @@ def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKL:
         attention_levels=(False,False,False),
         with_encoder_nonlocal_attn=False,
         with_decoder_nonlocal_attn=False,
+        use_checkpointing=False,
+        num_splits=4,
+        dim_split=1,
     )
 
     #caricamento checkpoint
@@ -77,7 +73,7 @@ def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKL:
 
 def encode_volume(
     image_path:str,
-    autoencoder:AutoencoderKL,
+    autoencoder:AutoencoderKlMaisi,
     transforms:Compose,
     device:torch.device,
     logger:logging.Logger,
@@ -121,7 +117,7 @@ def encode_volume(
 
 def encode_dataset(
     splits_path:str,
-    autoencoder:AutoencoderKL,
+    autoencoder:AutoencoderKlMaisi,
     transforms:Compose,
     device:torch.device,
     embedding_base_dir:str,
