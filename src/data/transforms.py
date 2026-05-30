@@ -91,9 +91,9 @@ def get_vae_transforms(
                 RandZoomd(
                     keys=["image"],
                     prob=0.3,
-                    min_zoom=0.7,
-                    max_zoom=1.3,
-                    keep_size=True,
+                    min_zoom=0.5,
+                    max_zoom=1.5,
+                    keep_size=False,
                     mode="bilinear",
                 ),
                 RandRotated(
