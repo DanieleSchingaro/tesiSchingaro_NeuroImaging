@@ -4,7 +4,10 @@
         "cache_rate": 0,
         "lr": 0.00001,
         "n_epochs": 1000,
-        "num_workers": 4
+        "num_workers": 4,
+        "val_interval": 50,
+        "save_interval": 100,
+        "amp": true
     },
     "diffusion_unet_inference": {
         "dim": [256, 256, 256],
