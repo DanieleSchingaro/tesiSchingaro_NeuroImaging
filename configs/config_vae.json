@@ -14,14 +14,14 @@
         "lr": 5e-5,
         "perceptual_weight": 0.3,
         "kl_weight": 5e-6,
-        "adv_weight": 0.05,
+        "adv_weight": 0.02,
         "recon_loss": "l1",
-        "val_interval": 10,
+        "val_interval": 5,
         "cache_rate": 0.0,
         "amp": true,
         "n_epochs": 300,
-        "num_workers": 4,
-        "warm_up_epochs": 5
+        "num_workers": 2,
+        "warm_up_epochs": 10
     },
     "paths": {
         "data_base_dir": "./data/raw",
