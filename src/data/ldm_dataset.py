@@ -98,7 +98,7 @@ def load_embeddings_splits(splits_path:str)->tuple[list,list,list]:
 
 def create_ldm_dataloader(
     data_list:list[dict],
-    batch_size=int=1,
+    batch_size:int=1,
     is_train:bool=True,
     num_workers:int=2,
     k:int=8,
@@ -153,7 +153,7 @@ def setup_ldm_dataloaders(
 
     test_sampler=DistributedSampler(
         test_files, num_replicas=world_size, rank=rank, shuffle=False,
-    ) is is_distributed else None
+    ) if is_distributed else None
 
     train_loader=create_ldm_dataloader(
         train_files, batch_size=batch_size, is_train=True,
