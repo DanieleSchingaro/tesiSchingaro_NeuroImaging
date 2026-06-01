@@ -131,7 +131,7 @@ def create_dataloader(
         sampler=sampler,
         num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=False,
         drop_last=True,
     )
     return dataloader
