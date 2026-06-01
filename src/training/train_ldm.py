@@ -319,14 +319,14 @@ def main():
             #salva sempre l'ultimo
             save_checkpoint(
                 epoch, unet, train_loss, scale_factor, num_train_timesteps,
-                os.path.join(save_dir, "ldm_last.pt"),
+                os.path.join(save_dir, "ldm_unet_last.pt"),
             )
 
             #checkpoint periodico (per scegliere poi il best con FID, non con val_loss)
             if (epoch+1)%save_interval==0:
                 save_checkpoint(
                     epoch, unet, train_loss, scale_factor, num_train_timesteps,
-                    os.path.join(save_dir, f"ldm_epoch{epoch+1}.pt"),
+                    os.path.join(save_dir, f"ldm_unet_epoch{epoch+1}.pt"),
                 )
         
         # validazione periodica (monitoraggio overfitting)
@@ -341,9 +341,9 @@ def main():
                     best_val_loss=val_loss
                     save_checkpoint(
                         epoch, unet, val_loss, scale_factor, num_train_timesteps,
-                        os.path.join(save_dir, "ldm_best.pt"),
+                        os.path.join(save_dir, "ldm_unet_best.pt"),
                     )
-                    print(f"  -> nuovo best (val_loss={val_loss:.5f}), salvato ldm_best.pt")
+                    print(f"  -> nuovo best (val_loss={val_loss:.5f}), salvato ldm_unet_best.pt")
  
     if dist.is_initialized():
         dist.destroy_process_group()
