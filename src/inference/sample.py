@@ -206,6 +206,14 @@ def main():
     output_size=tuple(infer_cfg.get("dim", [256, 256, 256]))
     spacing=tuple(infer_cfg.get("spacing", [1.0, 1.0, 1.0]))
     num_inference_steps=infer_cfg.get("num_inference_steps", 30)
+    
+    # SEED DI GENERAZIONE:
+    # base_seed e' fisso (da config, default 42) -> i campioni sono RIPRODUCIBILI:
+    # rilanciando la generazione si riottengono le STESSE immagini.
+    # Per ottenere un set DIVERSO di immagini, cambiare "random_seed" nel config
+    # (es. 42 -> 123), oppure passare un valore diverso. Ogni campione usa
+    # base_seed + idx, quindi le immagini sono comunque tutte diverse TRA LORO
+    # all'interno dello stesso run
     base_seed=infer_cfg.get("random_seed", 42)
  
     paths=config["paths"]
@@ -266,6 +274,8 @@ def main():
     progress=tqdm(my_indices, desc=f"rank{local_rank}", disable=not is_main)
     for idx in progress:
         # seed diverso per ogni campione -> volumi diversi
+        # Essendo base_seed fisso, due run con lo stesso base_seed producono gli
+        # stessi volumi (riproducibilita'). Cambiare base_seed nel config per un set nuovo.
         set_determinism(seed=base_seed + idx)
  
         data=generate_one(
