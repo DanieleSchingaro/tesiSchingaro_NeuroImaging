@@ -141,7 +141,7 @@ def setup_ldm_dataloaders(
     is_distributed=dist.is_available() and dist.is_initialized()
 
     rank=dist.get_rank() if is_distributed else 0
-    world_size=dist.get_rank() if is_distributed else 1
+    world_size=dist.get_world_size() if is_distributed else 1
 
     train_sampler=DistributedSampler(
         train_files, num_replicas=world_size, rank=rank, shuffle=True, seed=42,
