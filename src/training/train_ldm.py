@@ -24,7 +24,7 @@ from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from monai.utils import set_determinism, first
 from monai.networks.schedulers import RFlowScheduler
-from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import DiffusionModelUnetMaisi 
+from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import DiffusionModelUNetMaisi 
 from tqdm import tqdm
 import mlflow
 from src.data.ldm_dataset import setup_ldm_dataloaders
@@ -55,7 +55,7 @@ def setup_unet(net_cfg:dict, device:torch.device, local_rank:int)->torch.nn.Modu
     e i riferimenti "@..." del config bundle vengono ignorati: passiamo i valori
     espliciti.
     """
-    unet=DiffusionModelUnetMaisi(
+    unet=DiffusionModelUNetMaisi(
         spatial_dims=net_cfg.get("spatial_dims", 3),
         in_channels=net_cfg.get("in_channels", 4),
         out_channels=net_cfg.get("out_channels", 4),
