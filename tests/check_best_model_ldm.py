@@ -44,7 +44,7 @@ if "scale_factor" in checkpoint:
     sf_val=sf.item() if isinstance(sf, torch.Tensor) else sf
     print(f"scale_factor: {sf_val:.6f}")
     #validà -> finito e positivo
-    if not torch.isinfinite(torch.tensor(float(sf_val))):
+    if not torch.isfinite(torch.tensor(float(sf_val))):
         print("Attenzione: scale_factor NON finito (NaN/Inf) -> sampling corrotto")
     elif sf_val <=0:
         print("Attenzione: scale_factor <=0 -> valore anomalo")
