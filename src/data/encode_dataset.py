@@ -61,6 +61,9 @@ def load_autoencoder(checkpoint_path:str, device:torch.device)->AutoencoderKlMai
     else:
         state_dict=checkpoint
     
+    # rimuove il prefisso "module." aggiunto da DDP durante il training
+    state_dict={k.replace("module.", "", 1): v for k, v in state_dict.items()}
+    
     autoencoder.load_state_dict(state_dict)
     autoencoder=autoencoder.to(device)
 
