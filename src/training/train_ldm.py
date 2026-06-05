@@ -35,7 +35,7 @@ def setup_ddp()->tuple[int, torch.device]:
     Inizializza DDP con torchrun (LOCAL_RANK, RANK, WORLD_SIZE già settati)
     """
     dist.init_process_group(backend="nccl")
-    local_rank=int(os.environ(["LOCAL_RANK"]))
+    local_rank=int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device=torch.device(f"cuda:{local_rank}")
     return local_rank, device
