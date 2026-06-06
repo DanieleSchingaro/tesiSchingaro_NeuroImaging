@@ -27,7 +27,7 @@ from monai.networks.schedulers import RFlowScheduler
 from monai.utils import set_determinism 
 from tqdm import tqdm 
 from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKlMaisi 
-from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import DiffusionModelUnetMaisi 
+from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import DiffusionModelUNetMaisi 
 
 #ReconModel -> decodifica il latente in immagine
 class ReconModel(torch.nn.Module):
@@ -105,7 +105,7 @@ def load_unet(config_net:device, checkpoint_path:str, device:torch.device):
     dal checkpoint dell'LDM.
     """
     net_cfg=config_net["diffusion_unet_def"]
-    unet=DiffusionModelUnetMaisi(
+    unet=DiffusionModelUNetMaisi(
         spatial_dims=net_cfg.get("spatial_dims", 3),
         in_channels=net_cfg.get("in_channels", 4),
         out_channels=net_cfg.get("out_channels", 4),
