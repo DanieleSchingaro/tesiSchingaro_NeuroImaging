@@ -71,10 +71,10 @@ def load_autoencoder(config_net:dict, checkpoint_path:str, device:torch.device):
     """
     ae_cfg=config_net["autoencoder_def"]
     autoencoder=AutoencoderKlMaisi(
-        spatial_dims=ae_cfg.get("spatial_dims", 3),
-        in_channels=ae_cfg.get("in_channels", 1),
-        out_channels=ae_cfg.get("out_channels", 1),
-        latent_channels=ae_cfg.get("latent_channels", 4),
+        spatial_dims=3,
+        in_channels=1,
+        out_channels=1,
+        latent_channels=4,
         num_channels=ae_cfg.get("num_channels", [64, 128, 256]),
         num_res_blocks=ae_cfg.get("num_res_blocks", [2, 2, 2]),
         norm_num_groups=ae_cfg.get("norm_num_groups", 32),
