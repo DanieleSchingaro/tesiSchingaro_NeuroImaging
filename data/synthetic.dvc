@@ -1,0 +1,6 @@
+outs:
+- md5: fe9de7284ab9cdaff52cc977a9ab5134.dir
+  size: 1217849412
+  nfiles: 100
+  hash: md5
+  path: synthetic

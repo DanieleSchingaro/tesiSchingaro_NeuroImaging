@@ -24,6 +24,5 @@ mlruns/
 *.out
 outputs/models/*.pt
 outputs/models/*.pth
-outputs/generated/*.nii.gz
-outputs/generated/*.npy
+outputs/generated/*
 outputs/tfevent/
