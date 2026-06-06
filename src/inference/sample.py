@@ -43,7 +43,7 @@ class ReconModel(torch.nn.Module):
         self.scale_factor=scale_factor
     
     def forward(self, z):
-        recon=self.autoencoder.decode_state_2_outputs(z/self.scale_factor)
+        recon=self.autoencoder.decode_stage_2_outputs(z/self.scale_factor)
         return recon
 
 
@@ -99,7 +99,7 @@ def load_autoencoder(config_net:dict, checkpoint_path:str, device:torch.device):
     
     return autoencoder
 
-def load_unet(config_net:device, checkpoint_path:str, device:torch.device):
+def load_unet(config_net:dict, checkpoint_path:str, device:torch.device):
     """
     Carica la UNet di diffusione trainata + scale_factor + num_train_timesteps
     dal checkpoint dell'LDM.
