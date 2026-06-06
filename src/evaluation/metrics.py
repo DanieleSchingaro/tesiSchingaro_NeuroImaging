@@ -236,8 +236,8 @@ def compute_mmd(real_volumes, synth_volumes, device="cuda", max_pairs=None, verb
         n=min(n,max_pairs)
     scores=[]
     for k in range(n):
-        y=real_volumes[k].to(device).unsqueeze(0).unsqueeze(0)
-        y_pred=synth_volumes[k].to(device).unsqueeze(0).unsqueeze(0)
+        y=real_volumes[k].to(device).unsqueeze(0).unsqueeze(0).contiguous()
+        y_pred=synth_volumes[k].to(device).unsqueeze(0).unsqueeze(0).contiguous()
         val=mmd(y, y_pred)
         scores.append(float(val.mean().item()))
         del y,y_pred
