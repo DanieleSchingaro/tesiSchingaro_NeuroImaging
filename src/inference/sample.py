@@ -106,9 +106,9 @@ def load_unet(config_net:dict, checkpoint_path:str, device:torch.device):
     """
     net_cfg=config_net["diffusion_unet_def"]
     unet=DiffusionModelUNetMaisi(
-        spatial_dims=net_cfg.get("spatial_dims", 3),
-        in_channels=net_cfg.get("in_channels", 4),
-        out_channels=net_cfg.get("out_channels", 4),
+        spatial_dims=3,
+        in_channels=4,
+        out_channels=4,
         num_channels=net_cfg.get("num_channels", [64, 128, 256, 512]),
         attention_levels=net_cfg.get("attention_levels", [False, False, True, True]),
         num_head_channels=net_cfg.get("num_head_channels", [0, 0, 32, 32]),
