@@ -24,5 +24,7 @@ mlruns/
 *.out
 outputs/models/*.pt
 outputs/models/*.pth
-outputs/generated
+!outputs/models/.gitkeep
+outputs/generated/*
+!outputs/generated/.gitkeep
 outputs/tfevent/
