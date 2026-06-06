@@ -195,15 +195,12 @@ def save_nifti(data: np.ndarray, spacing:tuple, output_path:str):
 
 
 #Salvataggio PNG di anteprima (solo rank 0, a fine generazione)
-def save_previews(volumes_dir:str, png_dir:str, n_detail:int=4):
+def save_previews(volumes_dir:str, png_dir:str):
     """
-    Crea PNG di anteprima leggendo i volumi gia' salvati su disco.
-    Genera due tipi di immagine in png_dir:
-      1. contact_sheet.png : una slice assiale centrale per OGNI volume,
-         disposte a griglia -> sguardo d'insieme su tutti i campioni
-         (utile per cogliere varieta'/mode collapse a colpo d'occhio).
-      2. detail_NNNN.png   : per i primi n_detail volumi, le 3 viste
-         ortogonali (sagittale, coronale, assiale) -> ispezione dettagliata.
+    Crea un PNG per OGNI volume sintetico, con lo STESSO nome del volume
+    (hc_synth_NNNN.nii.gz -> hc_synth_NNNN.png), salvato in png_dir.
+    Ogni PNG mostra le 3 viste ortogonali (sagittale, coronale, assiale)
+    della slice centrale del volume.
     Usa matplotlib in backend 'Agg' (nessun display necessario sul server).
     """
     import matplotlib
@@ -216,43 +213,21 @@ def save_previews(volumes_dir:str, png_dir:str, n_detail:int=4):
         return
     os.makedirs(png_dir, exist_ok=True)
 
-    # --- 1. CONTACT SHEET: slice assiale centrale di tutti i campioni ---
-    n=len(files)
-    ncols=min(10, n)                      # max 10 per riga
-    nrows=(n + ncols - 1) // ncols
-    fig, axes=plt.subplots(nrows, ncols, figsize=(2*ncols, 2*nrows))
-    axes=np.atleast_1d(axes).ravel()
-    for i, f in enumerate(files):
-        vol=nib.load(f).get_fdata()
-        z=vol.shape[2]//2
-        axes[i].imshow(np.rot90(vol[:, :, z]), cmap="gray")
-        axes[i].set_title(os.path.basename(f).replace("hc_synth_", "").replace(".nii.gz", ""), fontsize=8)
-        axes[i].axis("off")
-    # spegne gli assi vuoti rimanenti
-    for j in range(n, len(axes)):
-        axes[j].axis("off")
-    plt.suptitle(f"Campioni sintetici HC - slice assiale centrale ({n} volumi)", fontsize=12)
-    plt.tight_layout()
-    contact_path=os.path.join(png_dir, "contact_sheet.png")
-    plt.savefig(contact_path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Anteprima contact sheet: {contact_path}")
-
-    # --- 2. DETTAGLIO a 3 piani per i primi n_detail volumi ---
-    for f in files[:n_detail]:
+    for f in files:
         vol=nib.load(f).get_fdata()
         x, y, z=[s//2 for s in vol.shape]
         fig, ax=plt.subplots(1, 3, figsize=(12, 4))
         ax[0].imshow(np.rot90(vol[x, :, :]), cmap="gray"); ax[0].set_title("Sagittale"); ax[0].axis("off")
         ax[1].imshow(np.rot90(vol[:, y, :]), cmap="gray"); ax[1].set_title("Coronale"); ax[1].axis("off")
         ax[2].imshow(np.rot90(vol[:, :, z]), cmap="gray"); ax[2].set_title("Assiale"); ax[2].axis("off")
+        # stesso nome del volume, estensione .png
         name=os.path.basename(f).replace(".nii.gz", "")
         plt.suptitle(name, fontsize=12)
         plt.tight_layout()
-        detail_path=os.path.join(png_dir, f"detail_{name.replace('hc_synth_', '')}.png")
-        plt.savefig(detail_path, dpi=100, bbox_inches="tight")
+        png_path=os.path.join(png_dir, f"{name}.png")
+        plt.savefig(png_path, dpi=100, bbox_inches="tight")
         plt.close(fig)
-    print(f"Anteprime dettaglio (primi {n_detail}): {png_dir}/detail_*.png")
+    print(f"Generati {len(files)} PNG (uno per volume) in {png_dir}")
 
 
 def main():
@@ -372,7 +347,7 @@ def main():
     # PNG di anteprima: SOLO il rank 0, DOPO la barrier (legge i volumi su disco
     # gia' scritti da tutti i rank). Cosi' nessun conflitto di scrittura.
     if is_main and not args.no_png:
-        save_previews(args.out_dir, args.png_dir, n_detail=4)
+        save_previews(args.out_dir, args.png_dir)
  
     if dist.is_initialized():
         dist.barrier()
