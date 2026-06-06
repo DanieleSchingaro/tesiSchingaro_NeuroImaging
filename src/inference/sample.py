@@ -91,6 +91,7 @@ def load_autoencoder(config_net:dict, checkpoint_path:str, device:torch.device):
 
     ckpt=torch.load(checkpoint_path, map_location=device)
     state=ckpt["autoencoder_state_dict"] if "autoencoder_state_dict" in ckpt else ckpt
+    state={k.replace("module.", "", 1): v for k, v in state.items()}
     autoencoder.load_state_dict(state)
     autoencoder.eval()
     for p in autoencoder.parameters():
@@ -123,7 +124,8 @@ def load_unet(config_net:device, checkpoint_path:str, device:torch.device):
     ).to(device)
 
     ckpt=torch.load(checkpoint_path, map_location=device, weights_only=False)
-    unet.load_state_dict(ckpt["unet_state_dict"], strict=False)
+    unet_state={k.replace("module.", "", 1): v for k, v in ckpt["unet_state_dict"].items()}
+    unet.load_state_dict(unet_state, strict=True)
     scale_factor=ckpt["scale_factor"]
     if isinstance(scale_factor, torch.Tensor):
         scale_factor=scale_factor.to(device)
@@ -276,7 +278,7 @@ def main():
         # seed diverso per ogni campione -> volumi diversi
         # Essendo base_seed fisso, due run con lo stesso base_seed producono gli
         # stessi volumi (riproducibilita'). Cambiare base_seed nel config per un set nuovo.
-        set_determinism(seed=base_seed + idx)
+        set_determinism(seed=base_seed+idx)
  
         data=generate_one(
             unet, recon_model, noise_scheduler, scale_factor,
