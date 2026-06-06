@@ -19,3 +19,5 @@ huggingface_hub>=0.20.0
 pytorch-msssim
 lpips
 dvc
+torchmetrics==1.9.0
+lightning-utilities==0.15.3
