@@ -28,6 +28,25 @@ from generative.metrics import FIDMetric
 from generative.metrics import MultiScaleSSIMMetric
 from generative.metrics import MMDMetric
 
+#stream di Volumi: carica un volume alla volta --> evita OOM
+class VolumeStream:
+    """
+    Sequenza pigra di volumi 3D. Invece di tenere N volumi in RAM, ne carica
+    UNO alla volta tramite una funzione loader(idx) -> tensore [H,W,D].
+    Supporta len() e indicizzazione vol_stream[i], quindi e' usabile come una
+    lista dalle funzioni delle metriche, ma con impronta di memoria minima.
+    """
+    def __init__(self, items, loader):
+        self.items=items
+        self.loader=loader
+    def __len__(self):
+        return len(self.items)
+    def __getitem__(self,idx):
+        return self.loader(self.items[idx])
+    def __iter__(self):
+        for it in self.items:
+            yield self.loader(it)
+
 #Estrattore di feature 2D: InceptionV3
 class InceptionFeatureExtractor(nn.Module):
     """
@@ -58,8 +77,7 @@ class InceptionFeatureExtractor(nn.Module):
         x=x.repeat(1,3,1,1) #scala di grigi
         x=F.interpolate(x, size=(299,299), mode="bilinear", align_corners=False)
         x=(x-self.mean)/self.std #normalizzazione ImageNet
-        feat=self.net(x)
-        return feat
+        return self.net(x)
 
 #Iterazione slice 2D sui tre piani (con drop delle slice quando vuote)
 def _iter_plane_slices(volume:torch.Tensor, plane:str, drop_empty:bool=True,
@@ -85,7 +103,7 @@ def _iter_plane_slices(volume:torch.Tensor, plane:str, drop_empty:bool=True,
         if drop_empty:
             frac=(s>0.02).float().mean().item()
             if frac<empty_frac:
-                return
+                continue
         yield s 
 
 @torch.no_grad()
@@ -105,12 +123,15 @@ def _extract_features_2p5d(volumes, extractor, plane, device,
         feats.append(f.cpu())
         buf.clear()
     
-    for vol in volumes:
+    for vol in volumes: #un volume alla volta
         vol=vol.to(device)
         for s in _iter_plane_slices(vol, plane, drop_empty=drop_empty):
             buf.append(s)
             if len(buf)>=batch_size:
                 flush()
+        del vol 
+        if device!= "cpu":
+            torch.cuda.empty_cache()
     
     flush()
     return torch.cat(feats, dim=0) if feats else torch.empty(0,2048)
@@ -187,6 +208,7 @@ def compute_msssim_diversity(volumes, device="cuda", n_pairs=200, seed=42, verbo
         b=volumes[j].to(device).unsqueeze(0).unsqueeze(0)
         val=msssim(a,b)
         scores.append(float(val.mean().item()))
+        del a,b
         if device != "cpu":
             torch.cuda.empty_cache()
     
@@ -197,7 +219,7 @@ def compute_msssim_diversity(volumes, device="cuda", n_pairs=200, seed=42, verbo
 
 #MMD: Maximum Mean Discrepancy
 @torch.no_grad()
-def compute_mmd(real_volumes, synth_volumes, device="cuda", verbose=True):
+def compute_mmd(real_volumes, synth_volumes, device="cuda", max_pairs=None, verbose=True):
     """
     MMD tra reali e sintetiche con generative.MMDMetric: mmd(y, y_pred) accetta
     tensori 3D [B,C,W,H,D]. Valori piu' bassi = distribuzioni piu' vicine.
@@ -206,15 +228,19 @@ def compute_mmd(real_volumes, synth_volumes, device="cuda", verbose=True):
     NB: l'MMD qui e' calcolata sui volumi grezzi. La MMDMetric supporta un
     y_transform/y_pred_transform opzionale (es. filtro gaussiano o estrattore di
     feature); lo lasciamo a None (identita') per semplicita' e coerenza.
+    Carica 2 volumi per volta --> niente OOM.
     """
     mmd=MMDMetric()
     n=min(len(real_volumes), len(synth_volumes))
+    if max_pairs is not None:
+        n=min(n,max_pairs)
     scores=[]
     for k in range(n):
         y=real_volumes[k].to(device).unsqueeze(0).unsqueeze(0)
         y_pred=synth_volumes[k].to(device).unsqueeze(0).unsqueeze(0)
         val=mmd(y, y_pred)
         scores.append(float(val.mean().item()))
+        del y,y_pred
         if device != "cpu":
             torch.cuda.empty_cache()
     
