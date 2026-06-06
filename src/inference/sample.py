@@ -26,7 +26,7 @@ from monai.inferers.inferer import SlidingWindowInferer
 from monai.networks.schedulers import RFlowScheduler
 from monai.utils import set_determinism 
 from tqdm import tqdm 
-from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKLMaisi 
+from monai.apps.generation.maisi.networks.autoencoderkl_maisi import AutoencoderKlMaisi 
 from monai.apps.generation.maisi.networks.diffusion_model_unet_maisi import DiffusionModelUnetMaisi 
 
 #ReconModel -> decodifica il latente in immagine
@@ -70,7 +70,7 @@ def load_autoencoder(config_net:dict, checkpoint_path:str, device:torch.device):
     use_checkpointing=False in inferenza.
     """
     ae_cfg=config_net["autoencoder_def"]
-    autoencoder=AutoencoderKLMaisi(
+    autoencoder=AutoencoderKlMaisi(
         spatial_dims=ae_cfg.get("spatial_dims", 3),
         in_channels=ae_cfg.get("in_channels", 1),
         out_channels=ae_cfg.get("out_channels", 1),
