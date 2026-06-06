@@ -8,11 +8,15 @@ Pipeline:
     1. rumore gaussiano [1,4,64,64,64]
     2. denoising RFlow (num_inference_steps step, default 30)
     3. decode del latente con il VAE
-    4. salvataggio come .nii.gz
+    4. salvataggio come .nii.gz in --out_dir (default data/synthetic)
+    5. (solo rank 0, a fine generazione) PNG di anteprima in --png_dir
+       (default outputs/generated/synthetic): un contact sheet con la slice
+       assiale centrale di tutti i campioni + un dettaglio a 3 piani dei primi.
 """
 
 import os
 import json
+import glob
 import argparse
 from datetime import datetime
 #riduce la frammentazione della memoria CUDA: va settato prima di importare torch
@@ -175,10 +179,12 @@ def generate_one(
     data=np.clip(data, 0.0, 1.0)
     return data
 
-#Salvataggio
+#Salvataggio volume
 def save_nifti(data: np.ndarray, spacing:tuple, output_path:str):
     """
-    Salva il volume come .nii.gz con affine diagonale dato la spacing.
+    Salva il volume come .nii.gz con affine diagonale dato lo spacing.
+    (Affine "diagonale" = spacing sulla diagonale, assi allineati, nessuna
+    rotazione: il volume risulta dritto, isotropo a 1mm, coerente coi reali.)
     """
     affine=np.eye(4)
     for i in range(3):
@@ -187,12 +193,79 @@ def save_nifti(data: np.ndarray, spacing:tuple, output_path:str):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     nib.save(img, output_path)
 
+
+#Salvataggio PNG di anteprima (solo rank 0, a fine generazione)
+def save_previews(volumes_dir:str, png_dir:str, n_detail:int=4):
+    """
+    Crea PNG di anteprima leggendo i volumi gia' salvati su disco.
+    Genera due tipi di immagine in png_dir:
+      1. contact_sheet.png : una slice assiale centrale per OGNI volume,
+         disposte a griglia -> sguardo d'insieme su tutti i campioni
+         (utile per cogliere varieta'/mode collapse a colpo d'occhio).
+      2. detail_NNNN.png   : per i primi n_detail volumi, le 3 viste
+         ortogonali (sagittale, coronale, assiale) -> ispezione dettagliata.
+    Usa matplotlib in backend 'Agg' (nessun display necessario sul server).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    files=sorted(glob.glob(os.path.join(volumes_dir, "hc_synth_*.nii.gz")))
+    if not files:
+        print(f"Nessun volume trovato in {volumes_dir}, salto le anteprime.")
+        return
+    os.makedirs(png_dir, exist_ok=True)
+
+    # --- 1. CONTACT SHEET: slice assiale centrale di tutti i campioni ---
+    n=len(files)
+    ncols=min(10, n)                      # max 10 per riga
+    nrows=(n + ncols - 1) // ncols
+    fig, axes=plt.subplots(nrows, ncols, figsize=(2*ncols, 2*nrows))
+    axes=np.atleast_1d(axes).ravel()
+    for i, f in enumerate(files):
+        vol=nib.load(f).get_fdata()
+        z=vol.shape[2]//2
+        axes[i].imshow(np.rot90(vol[:, :, z]), cmap="gray")
+        axes[i].set_title(os.path.basename(f).replace("hc_synth_", "").replace(".nii.gz", ""), fontsize=8)
+        axes[i].axis("off")
+    # spegne gli assi vuoti rimanenti
+    for j in range(n, len(axes)):
+        axes[j].axis("off")
+    plt.suptitle(f"Campioni sintetici HC - slice assiale centrale ({n} volumi)", fontsize=12)
+    plt.tight_layout()
+    contact_path=os.path.join(png_dir, "contact_sheet.png")
+    plt.savefig(contact_path, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Anteprima contact sheet: {contact_path}")
+
+    # --- 2. DETTAGLIO a 3 piani per i primi n_detail volumi ---
+    for f in files[:n_detail]:
+        vol=nib.load(f).get_fdata()
+        x, y, z=[s//2 for s in vol.shape]
+        fig, ax=plt.subplots(1, 3, figsize=(12, 4))
+        ax[0].imshow(np.rot90(vol[x, :, :]), cmap="gray"); ax[0].set_title("Sagittale"); ax[0].axis("off")
+        ax[1].imshow(np.rot90(vol[:, y, :]), cmap="gray"); ax[1].set_title("Coronale"); ax[1].axis("off")
+        ax[2].imshow(np.rot90(vol[:, :, z]), cmap="gray"); ax[2].set_title("Assiale"); ax[2].axis("off")
+        name=os.path.basename(f).replace(".nii.gz", "")
+        plt.suptitle(name, fontsize=12)
+        plt.tight_layout()
+        detail_path=os.path.join(png_dir, f"detail_{name.replace('hc_synth_', '')}.png")
+        plt.savefig(detail_path, dpi=100, bbox_inches="tight")
+        plt.close(fig)
+    print(f"Anteprime dettaglio (primi {n_detail}): {png_dir}/detail_*.png")
+
+
 def main():
     parser=argparse.ArgumentParser(description="Generazione MRI HC sintetiche con LDM")
     parser.add_argument("--config", type=str, default="configs/config_diff_model.json")
     parser.add_argument("--network", type=str, default="configs/config_network.json")
     parser.add_argument("--n_samples", type=int, default=100, help="numero totale di campioni da generare")
-    parser.add_argument("--out_dir", type=str, default="outputs/generated")
+    parser.add_argument("--out_dir", type=str, default="data/synthetic",
+                        help="cartella dei volumi .nii.gz sintetici")
+    parser.add_argument("--png_dir", type=str, default="outputs/generated/synthetic",
+                        help="cartella dei PNG di anteprima (generati a fine run dal rank 0)")
+    parser.add_argument("--no_png", action="store_true",
+                        help="se presente, NON genera i PNG di anteprima")
     args=parser.parse_args()
  
     with open(args.config) as f:
@@ -215,7 +288,10 @@ def main():
     # Per ottenere un set DIVERSO di immagini, cambiare "random_seed" nel config
     # (es. 42 -> 123), oppure passare un valore diverso. Ogni campione usa
     # base_seed + idx, quindi le immagini sono comunque tutte diverse TRA LORO
-    # all'interno dello stesso run
+    # all'interno dello stesso run.
+    # NB: su GPU il determinismo non e' garantito al 100% (operazioni CUDA/cuDNN).
+    # Per il set finale della tesi, versionare le immagini generate (DVC) e' piu'
+    # sicuro che affidarsi alla sola rigenerazione dal seed.
     base_seed=infer_cfg.get("random_seed", 42)
  
     paths=config["paths"]
@@ -272,6 +348,7 @@ def main():
  
     if is_main:
         print(f"Genero {args.n_samples} campioni totali su {world_size} GPU")
+        print(f"Volumi -> {args.out_dir}")
  
     progress=tqdm(my_indices, desc=f"rank{local_rank}", disable=not is_main)
     for idx in progress:
@@ -288,12 +365,21 @@ def main():
         out_path=os.path.join(args.out_dir, f"hc_synth_{idx+1:04d}.nii.gz")
         save_nifti(data, spacing, out_path)
  
+    # tutti i rank devono finire di scrivere i volumi prima delle anteprime
+    if dist.is_initialized():
+        dist.barrier()
+ 
+    # PNG di anteprima: SOLO il rank 0, DOPO la barrier (legge i volumi su disco
+    # gia' scritti da tutti i rank). Cosi' nessun conflitto di scrittura.
+    if is_main and not args.no_png:
+        save_previews(args.out_dir, args.png_dir, n_detail=4)
+ 
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()
  
     if is_main:
-        print(f"Generazione completata. File salvati in {args.out_dir}")
+        print(f"Generazione completata. Volumi in {args.out_dir}, anteprime in {args.png_dir}")
  
  
 if __name__=="__main__":
