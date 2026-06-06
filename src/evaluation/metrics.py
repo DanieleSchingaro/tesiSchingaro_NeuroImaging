@@ -142,7 +142,7 @@ def compute_fid_2p5d(real_volumes, synth_volumes, device="cuda",
         results[f"fid_{plane}"]=score
         if verbose:
             print(f"FID {plane.upper()}: {score:.3f}   "
-                  f"(slice reali={real_feat_shape[0]}, sint={synth_feat.shape[0]})")
+                  f"(slice reali={real_feat.shape[0]}, sint={synth_feat.shape[0]})")
         if device != "cpu":
             torch.cuda.empty_cache()
     
@@ -184,7 +184,7 @@ def compute_msssim_diversity(volumes, device="cuda", n_pairs=200, seed=42, verbo
     for _ in range(n_pairs):
         i,j=rng.choice(n, size=2, replace=False)
         a=volumes[i].to(device).unsqueeze(0).unsqueeze(0) #[1,1,H,W,D]
-        b=volums[j].to(device).unsqueeze(0).unsqueeze(0)
+        b=volumes[j].to(device).unsqueeze(0).unsqueeze(0)
         val=msssim(a,b)
         scores.append(float(val.mean().item()))
         if device != "cpu":
@@ -197,7 +197,7 @@ def compute_msssim_diversity(volumes, device="cuda", n_pairs=200, seed=42, verbo
 
 #MMD: Maximum Mean Discrepancy
 @torch.no_grad()
-def compute_mmmd(real_volumes, synth_volumes, device="cuda", verbose=True):
+def compute_mmd(real_volumes, synth_volumes, device="cuda", verbose=True):
     """
     MMD tra reali e sintetiche con generative.MMDMetric: mmd(y, y_pred) accetta
     tensori 3D [B,C,W,H,D]. Valori piu' bassi = distribuzioni piu' vicine.
@@ -215,8 +215,8 @@ def compute_mmmd(real_volumes, synth_volumes, device="cuda", verbose=True):
         y_pred=synth_volumes[k].to(device).unsqueeze(0).unsqueeze(0)
         val=mmd(y, y_pred)
         scores.append(float(val.mean().item()))
-        if device != "cuda"
-        torch.cuda.empty_cache()
+        if device != "cpu":
+            torch.cuda.empty_cache()
     
     mean_scores=float(np.mean(scores))
     if verbose:
