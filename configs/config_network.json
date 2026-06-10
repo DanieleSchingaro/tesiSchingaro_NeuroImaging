@@ -17,7 +17,7 @@
         "latent_channels": "@latent_channels",
         "num_channels": [
             64,
-            128,
+            120,
             256
         ],
         "num_res_blocks": [2,2,2],
