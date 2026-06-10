@@ -16,9 +16,9 @@
         "out_channels": "@image_channels",
         "latent_channels": "@latent_channels",
         "num_channels": [
-            64,
             128,
-            256
+            256,
+            512
         ],
         "num_res_blocks": [2,2,2],
         "norm_num_groups": 32,
@@ -30,10 +30,10 @@
         ],
         "with_encoder_nonlocal_attn": false,
         "with_decoder_nonlocal_attn": false,
-        "use_checkpointing": false,
+        "use_checkpointing": true,
         "use_convtranspose": false,
         "norm_float16": true,
-        "num_splits": 4,
+        "num_splits": 8,
         "dim_split": 1
     },
     "diffusion_unet_def": {

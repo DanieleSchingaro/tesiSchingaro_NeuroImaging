@@ -12,7 +12,7 @@
         "val_patch_size": null,
         "val_sliding_window_patch_size": [96, 96, 64],
         "lr": 5e-5,
-        "perceptual_weight": 0.3,
+        "perceptual_weight": 0.7,
         "kl_weight": 5e-6,
         "adv_weight": 0.02,
         "recon_loss": "l1",
@@ -25,7 +25,7 @@
     },
     "paths": {
         "data_base_dir": "./data/raw",
-        "model_dir": "./outputs/models",
+        "model_dir": "./outputs/models_v2",
         "model_filename": "autoencoder.pt",
         "splits_path": "./data/splits/dataset.json"
     }
