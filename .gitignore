@@ -27,4 +27,5 @@ outputs/models/*.pth
 !outputs/models/.gitkeep
 outputs/generated/*
 !outputs/generated/.gitkeep
-outputs/tfevent/
+outputs/tfevent/outputs/models_v2/*.pt
+outputs/models_v2/*.pth
