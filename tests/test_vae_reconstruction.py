@@ -20,7 +20,7 @@ from src.data.transforms import get_encoding_transforms
 from src.data.dataset import load_splits
 
 #CONFIG
-CHECKPOINT_PATH="outputs/models/autoencoder_best.pt"
+CHECKPOINT_PATH="outputs/models_v2/autoencoder_best.pt"
 SPLITS_PATH="data/splits/dataset.json"
 OUTPUT_DIR="outputs/generated/reconstructions"
 N_VOLUMES=4
