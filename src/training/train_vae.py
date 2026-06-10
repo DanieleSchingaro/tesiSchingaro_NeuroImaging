@@ -431,7 +431,7 @@ def save_learning_curves(
 
     #salvataggio grafico
     os.makedirs(save_dir, exist_ok=True)
-    curve_path=os.path.join("outputs", "metrics", "learning_curves_vae.png")
+    curve_path=os.path.join("outputs", "metrics", "learning_curves_vae_v2.png")
     plt.savefig(curve_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
