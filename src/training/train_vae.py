@@ -61,7 +61,7 @@ def setup_models(config:dict, device:torch.device):
         attention_levels=(False, False, False),
         with_encoder_nonlocal_attn=False,
         with_decoder_nonlocal_attn=False,
-        use_checkpointing=False,   # ← gradient checkpointing per 256³
+        use_checkpointing=True,   # ← gradient checkpointing per 256³
         num_splits=1,             # ← split per efficienza memoria
         dim_split=1,
     )
