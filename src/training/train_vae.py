@@ -54,7 +54,7 @@ def setup_models(config:dict, device:torch.device):
         in_channels=1,
         out_channels=1,
         latent_channels=4,
-        num_channels=(64, 128, 256),
+        num_channels=(128, 256, 512),
         num_res_blocks=(2, 2, 2),
         norm_num_groups=32,
         norm_eps=1e-6,
@@ -62,7 +62,7 @@ def setup_models(config:dict, device:torch.device):
         with_encoder_nonlocal_attn=False,
         with_decoder_nonlocal_attn=False,
         use_checkpointing=True,   # ← gradient checkpointing per 256³
-        num_splits=4,             # ← split per efficienza memoria
+        num_splits=8,             # ← split per efficienza memoria
         dim_split=1,
     )
 
