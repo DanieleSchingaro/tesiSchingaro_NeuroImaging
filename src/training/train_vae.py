@@ -21,6 +21,7 @@ from monai.apps.generation.maisi.networks.autoencoderkl_maisi import Autoencoder
 from monai.losses import PerceptualLoss
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.utils import set_determinism
+from monai.inferers import sliding_window_inference
 from src.data.dataset import setup_dataloaders
 import matplotlib.pyplot as plt
 import numpy as np
@@ -294,17 +295,26 @@ def validate(
     perceptual_loss,
     device:torch.device,
     perceptual_weight:float,
+    sw_roi_size:tuple=(128, 128, 128),
 )->dict:
     """
-    Validazione del VAE sul validation set.
-    Calcola solo la loss di ricostruzione e la perceptual
+    Validazione del VAE sul validation set, sull'INTERO volume.
+    Usa sliding_window_inference per ricostruire il volume completo a finestre
+    (efficiente in memoria), poi calcola recon loss (L1) e perceptual loss sul
+    volume intero ricomposto.
+    I risultati parziali di ogni rank vengono combinati via all_reduce, cosi'
+    la metrica riportata e' calcolata su TUTTO il validation set.
     """
     autoencoder.eval()
     val_recon_loss=0.0
     val_p_loss=0.0
-
-    #ranngo per barra tqdm --> solo rank 0 == solo una barra
     rank=dist.get_rank() if dist.is_initialized() else 0
+
+    # il VAE restituisce (recon, z_mu, z_sigma): per lo sliding window serve un
+    # predictor che restituisca solo il tensore di ricostruzione
+    def _vae_predictor(x):
+        recon, _, _=autoencoder(x)
+        return recon
 
     with torch.no_grad():
         for step,batch in enumerate(tqdm(
@@ -315,20 +325,33 @@ def validate(
         )):
             images=batch["image"].to(device)
             with autocast("cuda", enabled=True):
-                #forward pass
-                reconstruction, z_mu, z_sigma=autoencoder(images)
-                #loss reconstruction
+                # ricostruzione dell'intero volume a finestre scorrevoli
+                reconstruction=sliding_window_inference(
+                    inputs=images,
+                    roi_size=sw_roi_size,
+                    sw_batch_size=1,
+                    predictor=_vae_predictor,
+                    overlap=0.25,
+                    mode="gaussian",
+                )
                 recon_loss=l1_loss(reconstruction.float(), images.float())
-                #perceptual loss
                 p_loss=perceptual_loss(reconstruction.float(), images.float())
-
             val_recon_loss+=recon_loss.item()
             val_p_loss+=p_loss.item()
-    
+
     n_steps=len(val_loader)
+
+    # combina i risultati di tutti i rank: somma le loss e i conteggi, poi media
+    if dist.is_available() and dist.is_initialized():
+        stats=torch.tensor([val_recon_loss, val_p_loss, float(n_steps)], device=device)
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+        val_recon_loss, val_p_loss, total_steps=stats[0].item(), stats[1].item(), stats[2].item()
+    else:
+        total_steps=n_steps
+
     return{
-        "val_recon_loss": val_recon_loss/n_steps,
-        "val_p_loss": val_p_loss/n_steps,
+        "val_recon_loss": val_recon_loss/total_steps,
+        "val_p_loss": val_p_loss/total_steps,
     }
 
 def save_checkpoint(
@@ -608,6 +631,7 @@ def main():
                     perceptual_loss=perceptual_loss,
                     device=device,
                     perceptual_weight=perceptual_weight,
+                    sw_roi_size=tuple(train_cfg.get("val_sliding_window_patch_size", [128,128,128])),
                 )
 
                 if is_main_process:
