@@ -8,6 +8,7 @@ import os
 import json
 import time
 import torch
+from datetime import timedelta
 from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -36,7 +37,7 @@ def setup_ddp()->tuple[int, torch.device]:
     Inizializza DDP con torchrun.
     torchrun setta LOCAL_RANK, RANK, WORLD_SIZE automaticamente.
     """
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     local_rank=int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device=torch.device(f"cuda:{local_rank}")
