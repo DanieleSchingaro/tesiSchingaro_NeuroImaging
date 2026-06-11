@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:4
 #SBATCH --mem=128G
-#SBATCH --time=200:00:00
+#SBATCH --time=500:00:00
 
 source /mnt/data/home-ubuntu/work/medical-3D-Rflow-Maisi-Schingaro/.venv/bin/activate
 cd /mnt/data/home-ubuntu/work/medical-3D-Rflow-Maisi-Schingaro
