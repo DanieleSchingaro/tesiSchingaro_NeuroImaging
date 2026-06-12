@@ -299,13 +299,24 @@ def validate(
 )->dict:
     """
     Validazione del VAE sul validation set, sull'INTERO volume.
-    Usa sliding_window_inference per ricostruire il volume completo a finestre
-    (efficiente in memoria), poi calcola recon loss (L1) e perceptual loss sul
-    volume intero ricomposto.
-    I risultati parziali di ogni rank vengono combinati via all_reduce, cosi'
-    la metrica riportata e' calcolata su TUTTO il validation set.
+
+    Ogni rank valida la propria porzione di volumi (data dal DistributedSampler)
+    in modo INDIPENDENTE: per evitare deadlock NCCL, lo sliding_window_inference
+    usa il modello UNWRAPPED (.module), il cui forward NON lancia operazioni
+    collettive. Il numero di finestre per volume puo' quindi differire tra i rank
+    senza causare disallineamenti.
+
+    I rank si sincronizzano una sola volta alla fine, con un all_reduce che somma
+    le loss parziali e i conteggi: la metrica finale e' quindi calcolata su TUTTI
+    i volumi del validation set, distribuiti sulle GPU.
     """
     autoencoder.eval()
+
+    # usa SEMPRE il modello nudo (senza wrapper DDP) per il forward durante lo
+    # sliding window: il forward di un modulo DDP lancerebbe collettive NCCL e,
+    # con un numero di finestre variabile tra i rank, andrebbe in deadlock.
+    core_model=autoencoder.module if hasattr(autoencoder, "module") else autoencoder
+
     val_recon_loss=0.0
     val_p_loss=0.0
     rank=dist.get_rank() if dist.is_initialized() else 0
@@ -313,7 +324,7 @@ def validate(
     # il VAE restituisce (recon, z_mu, z_sigma): per lo sliding window serve un
     # predictor che restituisca solo il tensore di ricostruzione
     def _vae_predictor(x):
-        recon, _, _=autoencoder(x)
+        recon, _, _=core_model(x)
         return recon
 
     with torch.no_grad():
@@ -341,7 +352,8 @@ def validate(
 
     n_steps=len(val_loader)
 
-    # combina i risultati di tutti i rank: somma le loss e i conteggi, poi media
+    # sincronizzazione UNICA tra i rank: somma loss e conteggi, poi media globale.
+    # Questa e' l'unica collettiva della validazione, identica per tutti i rank.
     if dist.is_available() and dist.is_initialized():
         stats=torch.tensor([val_recon_loss, val_p_loss, float(n_steps)], device=device)
         dist.all_reduce(stats, op=dist.ReduceOp.SUM)
