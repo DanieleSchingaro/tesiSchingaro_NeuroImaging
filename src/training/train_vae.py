@@ -219,9 +219,14 @@ def train_one_epoch(
                     epoch_gen_loss+=generator_loss.item()
 
         #NaN guard generator
-        if torch.isnan(loss_g) or torch.isinf(loss_g):
-            optimizer_g.zero_grad(set_to_none=True)
-            continue
+        #NIENTE 'continue': romperebbe la sincronizzazione DDP (il backward fa un
+        #all_reduce dei gradienti che TUTTI i rank devono eseguire insieme; se un
+        #rank salta l'iterazione, gli altri restano appesi -> deadlock NCCL).
+        #Se la loss e' NaN/Inf la azzeriamo mantenendo il grafo: il backward gira
+        #con gradiente nullo (non aggiorna i pesi) e tutti i rank restano allineati.
+        loss_g_is_bad=bool(torch.isnan(loss_g) or torch.isinf(loss_g))
+        if loss_g_is_bad:
+            loss_g=reconstruction.sum() * 0.0
 
         #backward + step generator
         scaler_g.scale(loss_g).backward()
@@ -252,10 +257,12 @@ def train_one_epoch(
             loss_d=adv_weight*discriminator_loss
 
             #NaN guard discriminator
-            if torch.isnan(loss_d) or torch.isinf(loss_d):
+            #Stessa logica del generator: niente 'continue', azzeriamo la loss
+            #mantenendo il grafo cosi' il backward gira su tutti i rank.
+            loss_d_is_bad=bool(torch.isnan(loss_d) or torch.isinf(loss_d))
+            if loss_d_is_bad:
                 print(f"[WARNING] NaN discriminator epoch {epoch} step {step}")
-                optimizer_d.zero_grad(set_to_none=True)
-                continue
+                loss_d=(logits_fake.sum() + logits_real.sum()) * 0.0
 
             #backward + step discriminator (FP32, no scaler)
             loss_d.backward()
@@ -265,11 +272,13 @@ def train_one_epoch(
                 max_norm=1.0
             )
             optimizer_d.step()
-            epoch_disc_loss+=discriminator_loss.item()
+            if not loss_d_is_bad:
+                epoch_disc_loss+=discriminator_loss.item()
 
-        #accumulo loss per il logging
-        epoch_recon_loss+=recon_loss.item()
-        epoch_kl_loss+=kl_loss.item()
+        #accumulo loss per il logging (solo se la loss era valida)
+        if not loss_g_is_bad:
+            epoch_recon_loss+=recon_loss.item()
+            epoch_kl_loss+=kl_loss.item()
 
         progress_bar.set_postfix({
             "recon":f"{epoch_recon_loss/(step+1):.4f}",
@@ -296,34 +305,60 @@ def validate(
     perceptual_weight:float,
 )->dict:
     """
-    Validazione del VAE su rank 0 SOLTANTO, forward diretto su patch.
-    Nessuna operazione collettiva: gli altri rank non entrano qui e si
-    riallineano alla barriera nel loop di training. Impossibile deadlock.
+    Validazione del VAE sul validation set (forward diretto su patch).
+
+    Validazione DISTRIBUITA su tutti i 100 volumi: ogni rank valida la propria
+    porzione (data dal DistributedSampler, ~25 volumi per rank), poi un unico
+    all_reduce finale somma loss e conteggi -> la metrica e' calcolata su TUTTO
+    il validation set.
+
+    Usa il modello unwrapped (.module): il forward NON lancia operazioni
+    collettive, quindi eventuali differenze tra rank non causano deadlock.
+    L'unica collettiva e' l'all_reduce finale, identico per tutti i rank.
     """
     autoencoder.eval()
+
+    #modello nudo (senza wrapper DDP): il forward non lancia collettive NCCL
     core_model=autoencoder.module if hasattr(autoencoder, "module") else autoencoder
 
     val_recon_loss=0.0
     val_p_loss=0.0
+    rank=dist.get_rank() if dist.is_initialized() else 0
 
     with torch.no_grad():
         for step,batch in enumerate(tqdm(
             val_loader,
             desc=f"Validation epoch {epoch}",
             ncols=100,
+            disable=rank!=0,
         )):
             images=batch["image"].to(device)
             with autocast("cuda", enabled=True):
+                #forward pass diretto sulla patch
                 reconstruction, z_mu, z_sigma=core_model(images)
+                #loss reconstruction
                 recon_loss=l1_loss(reconstruction.float(), images.float())
+                #perceptual loss
                 p_loss=perceptual_loss(reconstruction.float(), images.float())
+
             val_recon_loss+=recon_loss.item()
             val_p_loss+=p_loss.item()
 
-    n_steps=max(len(val_loader), 1)
+    n_steps=len(val_loader)
+
+    #sincronizzazione UNICA tra i rank: somma loss parziali e conteggi, poi media.
+    #Questa e' l'unica collettiva della validazione, identica per tutti i rank,
+    #quindi non puo' disallinearsi.
+    if dist.is_available() and dist.is_initialized():
+        stats=torch.tensor([val_recon_loss, val_p_loss, float(n_steps)], device=device)
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+        val_recon_loss, val_p_loss, total_steps=stats[0].item(), stats[1].item(), stats[2].item()
+    else:
+        total_steps=n_steps
+
     return{
-        "val_recon_loss": val_recon_loss/n_steps,
-        "val_p_loss": val_p_loss/n_steps,
+        "val_recon_loss": val_recon_loss/total_steps,
+        "val_p_loss": val_p_loss/total_steps,
     }
 
 def save_checkpoint(
@@ -583,17 +618,30 @@ def main():
 
             if (epoch + 1) % val_interval == 0:
 
-                if is_main_process:
-                    val_metrics=validate(
-                        epoch=epoch,
-                        autoencoder=autoencoder,
-                        val_loader=val_loader,
-                        l1_loss=l1_loss,
-                        perceptual_loss=perceptual_loss,
-                        device=device,
-                        perceptual_weight=perceptual_weight,
-                    )
+                #validazione DISTRIBUITA: tutti i rank entrano in validate(),
+                #ognuno valida ~25 volumi, l'all_reduce finale (dentro validate)
+                #combina i risultati su tutti i 100 volumi. E' una collettiva
+                #unica e identica per tutti -> niente deadlock.
+                val_metrics=validate(
+                    epoch=epoch,
+                    autoencoder=autoencoder,
+                    val_loader=val_loader,
+                    l1_loss=l1_loss,
+                    perceptual_loss=perceptual_loss,
+                    device=device,
+                    perceptual_weight=perceptual_weight,
+                )
 
+                all_val_recon.append(val_metrics["val_recon_loss"])
+
+                is_best=val_metrics["val_recon_loss"] < best_val_loss
+                if is_best:
+                    best_val_loss=val_metrics["val_recon_loss"]
+
+                #logging, stampa e salvataggio SOLO su rank 0 (niente collettive):
+                #il checkpoint da ~967MB lo scrive un solo processo, evitando la
+                #contesa di 4 rank sullo stesso file.
+                if is_main_process:
                     mlflow.log_metrics({
                         "val_recon_loss": val_metrics["val_recon_loss"],
                         "val_p_loss": val_metrics["val_p_loss"],
@@ -604,12 +652,6 @@ def main():
                         f"train_recon: {train_metrics['recon_loss']:.4f} | "
                         f"val_recon: {val_metrics['val_recon_loss']:.4f}"
                     )
-
-                    all_val_recon.append(val_metrics["val_recon_loss"])
-
-                    is_best=val_metrics["val_recon_loss"] < best_val_loss
-                    if is_best:
-                        best_val_loss=val_metrics["val_recon_loss"]
 
                     save_checkpoint(
                         epoch=epoch,
@@ -622,7 +664,9 @@ def main():
                         is_best=is_best,
                     )
 
-                # tutti i rank (incluso rank 0) si riallineano qui
+                #tutti i rank si riallineano qui prima dell'epoca successiva:
+                #rank 0 ha appena scritto il checkpoint (operazione lunga), gli
+                #altri lo aspettano, cosi' nessuno parte sfasato.
                 if dist.is_initialized():
                     dist.barrier()
 
