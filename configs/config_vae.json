@@ -9,7 +9,7 @@
         "batch_size": 1,
         "patch_size": [128, 128, 128],
         "val_batch_size": 1,
-        "val_patch_size": null,
+        "val_patch_size": [128, 128, 128],
         "val_sliding_window_patch_size": [128, 128, 128],
         "lr": 5e-5,
         "perceptual_weight": 0.7,

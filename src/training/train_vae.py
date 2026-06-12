@@ -21,7 +21,6 @@ from monai.apps.generation.maisi.networks.autoencoderkl_maisi import Autoencoder
 from monai.losses import PerceptualLoss
 from monai.losses.adversarial_loss import PatchAdversarialLoss
 from monai.utils import set_determinism
-from monai.inferers import sliding_window_inference
 from src.data.dataset import setup_dataloaders
 import matplotlib.pyplot as plt
 import numpy as np
@@ -295,37 +294,23 @@ def validate(
     perceptual_loss,
     device:torch.device,
     perceptual_weight:float,
-    sw_roi_size:tuple=(128, 128, 128),
 )->dict:
     """
-    Validazione del VAE sul validation set, sull'INTERO volume.
+    Validazione del VAE sul validation set (forward diretto su patch).
 
-    Ogni rank valida la propria porzione di volumi (data dal DistributedSampler)
-    in modo INDIPENDENTE: per evitare deadlock NCCL, lo sliding_window_inference
-    usa il modello UNWRAPPED (.module), il cui forward NON lancia operazioni
-    collettive. Il numero di finestre per volume puo' quindi differire tra i rank
-    senza causare disallineamenti.
-
-    I rank si sincronizzano una sola volta alla fine, con un all_reduce che somma
-    le loss parziali e i conteggi: la metrica finale e' quindi calcolata su TUTTI
-    i volumi del validation set, distribuiti sulle GPU.
+    Come in MAISI/main: niente sliding window durante il training. Ogni rank
+    valida la propria porzione di volumi (DistributedSampler) con un forward
+    diretto sulla patch caricata dal val_loader (dimensione data da
+    val_patch_size nel config). I risultati dei rank vengono combinati con un
+    unico all_reduce finale, cosi' la metrica e' su tutto il validation set.
+    Usa il modello unwrapped (.module) per non lanciare collettive nel forward.
     """
     autoencoder.eval()
-
-    # usa SEMPRE il modello nudo (senza wrapper DDP) per il forward durante lo
-    # sliding window: il forward di un modulo DDP lancerebbe collettive NCCL e,
-    # con un numero di finestre variabile tra i rank, andrebbe in deadlock.
     core_model=autoencoder.module if hasattr(autoencoder, "module") else autoencoder
 
     val_recon_loss=0.0
     val_p_loss=0.0
     rank=dist.get_rank() if dist.is_initialized() else 0
-
-    # il VAE restituisce (recon, z_mu, z_sigma): per lo sliding window serve un
-    # predictor che restituisca solo il tensore di ricostruzione
-    def _vae_predictor(x):
-        recon, _, _=core_model(x)
-        return recon
 
     with torch.no_grad():
         for step,batch in enumerate(tqdm(
@@ -336,15 +321,7 @@ def validate(
         )):
             images=batch["image"].to(device)
             with autocast("cuda", enabled=True):
-                # ricostruzione dell'intero volume a finestre scorrevoli
-                reconstruction=sliding_window_inference(
-                    inputs=images,
-                    roi_size=sw_roi_size,
-                    sw_batch_size=1,
-                    predictor=_vae_predictor,
-                    overlap=0.25,
-                    mode="gaussian",
-                )
+                reconstruction, z_mu, z_sigma=core_model(images)
                 recon_loss=l1_loss(reconstruction.float(), images.float())
                 p_loss=perceptual_loss(reconstruction.float(), images.float())
             val_recon_loss+=recon_loss.item()
@@ -352,8 +329,6 @@ def validate(
 
     n_steps=len(val_loader)
 
-    # sincronizzazione UNICA tra i rank: somma loss e conteggi, poi media globale.
-    # Questa e' l'unica collettiva della validazione, identica per tutti i rank.
     if dist.is_available() and dist.is_initialized():
         stats=torch.tensor([val_recon_loss, val_p_loss, float(n_steps)], device=device)
         dist.all_reduce(stats, op=dist.ReduceOp.SUM)
@@ -631,7 +606,6 @@ def main():
                     perceptual_loss=perceptual_loss,
                     device=device,
                     perceptual_weight=perceptual_weight,
-                    sw_roi_size=tuple(train_cfg.get("val_sliding_window_patch_size", [128,128,128])),
                 )
 
                 if is_main_process:
