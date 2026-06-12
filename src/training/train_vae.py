@@ -296,28 +296,21 @@ def validate(
     perceptual_weight:float,
 )->dict:
     """
-    Validazione del VAE sul validation set (forward diretto su patch).
-
-    Come in MAISI/main: niente sliding window durante il training. Ogni rank
-    valida la propria porzione di volumi (DistributedSampler) con un forward
-    diretto sulla patch caricata dal val_loader (dimensione data da
-    val_patch_size nel config). I risultati dei rank vengono combinati con un
-    unico all_reduce finale, cosi' la metrica e' su tutto il validation set.
-    Usa il modello unwrapped (.module) per non lanciare collettive nel forward.
+    Validazione del VAE su rank 0 SOLTANTO, forward diretto su patch.
+    Nessuna operazione collettiva: gli altri rank non entrano qui e si
+    riallineano alla barriera nel loop di training. Impossibile deadlock.
     """
     autoencoder.eval()
     core_model=autoencoder.module if hasattr(autoencoder, "module") else autoencoder
 
     val_recon_loss=0.0
     val_p_loss=0.0
-    rank=dist.get_rank() if dist.is_initialized() else 0
 
     with torch.no_grad():
         for step,batch in enumerate(tqdm(
             val_loader,
             desc=f"Validation epoch {epoch}",
             ncols=100,
-            disable=rank!=0,
         )):
             images=batch["image"].to(device)
             with autocast("cuda", enabled=True):
@@ -327,18 +320,10 @@ def validate(
             val_recon_loss+=recon_loss.item()
             val_p_loss+=p_loss.item()
 
-    n_steps=len(val_loader)
-
-    if dist.is_available() and dist.is_initialized():
-        stats=torch.tensor([val_recon_loss, val_p_loss, float(n_steps)], device=device)
-        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
-        val_recon_loss, val_p_loss, total_steps=stats[0].item(), stats[1].item(), stats[2].item()
-    else:
-        total_steps=n_steps
-
+    n_steps=max(len(val_loader), 1)
     return{
-        "val_recon_loss": val_recon_loss/total_steps,
-        "val_p_loss": val_p_loss/total_steps,
+        "val_recon_loss": val_recon_loss/n_steps,
+        "val_p_loss": val_p_loss/n_steps,
     }
 
 def save_checkpoint(
@@ -598,17 +583,17 @@ def main():
 
             if (epoch + 1) % val_interval == 0:
 
-                val_metrics=validate(
-                    epoch=epoch,
-                    autoencoder=autoencoder,
-                    val_loader=val_loader,
-                    l1_loss=l1_loss,
-                    perceptual_loss=perceptual_loss,
-                    device=device,
-                    perceptual_weight=perceptual_weight,
-                )
-
                 if is_main_process:
+                    val_metrics=validate(
+                        epoch=epoch,
+                        autoencoder=autoencoder,
+                        val_loader=val_loader,
+                        l1_loss=l1_loss,
+                        perceptual_loss=perceptual_loss,
+                        device=device,
+                        perceptual_weight=perceptual_weight,
+                    )
+
                     mlflow.log_metrics({
                         "val_recon_loss": val_metrics["val_recon_loss"],
                         "val_p_loss": val_metrics["val_p_loss"],
@@ -620,16 +605,12 @@ def main():
                         f"val_recon: {val_metrics['val_recon_loss']:.4f}"
                     )
 
-                all_val_recon.append(val_metrics["val_recon_loss"])
+                    all_val_recon.append(val_metrics["val_recon_loss"])
 
-                is_best=val_metrics["val_recon_loss"] < best_val_loss
-                if is_best:
-                    best_val_loss=val_metrics["val_recon_loss"]
+                    is_best=val_metrics["val_recon_loss"] < best_val_loss
+                    if is_best:
+                        best_val_loss=val_metrics["val_recon_loss"]
 
-                # SALVATAGGIO SOLO SU RANK 0: evita che 4 processi scrivano lo
-                # stesso file da ~967MB in contemporanea (contesa I/O e
-                # disallineamento dei rank al training successivo).
-                if is_main_process:
                     save_checkpoint(
                         epoch=epoch,
                         autoencoder=autoencoder,
@@ -641,9 +622,7 @@ def main():
                         is_best=is_best,
                     )
 
-                # tutti i rank si riallineano qui prima di proseguire: rank 0 ha
-                # appena scritto il checkpoint (operazione lunga), gli altri lo
-                # aspettano, cosi' nessuno parte sfasato all'epoca successiva.
+                # tutti i rank (incluso rank 0) si riallineano qui
                 if dist.is_initialized():
                     dist.barrier()
 
