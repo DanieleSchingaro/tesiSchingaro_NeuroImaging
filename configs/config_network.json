@@ -33,7 +33,7 @@
         "use_checkpointing": true,
         "use_convtranspose": false,
         "norm_float16": true,
-        "num_splits": 8,
+        "num_splits": 1,
         "dim_split": 1
     },
     "diffusion_unet_def": {

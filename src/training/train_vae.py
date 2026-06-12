@@ -542,20 +542,8 @@ def main():
 
     with mlflow_run if mlflow_run is not None else nullcontext():
 
-        #inizializzazione modelli
+        #inizializzazione modelli (setup_models applica gia' il wrap DDP)
         autoencoder, discriminator=setup_models(config_vae, device)
-
-        autoencoder=torch.nn.parallel.DistributedDataParallel(
-            autoencoder,
-            device_ids=[local_rank],
-            output_device=local_rank
-        )
-
-        discriminator=torch.nn.parallel.DistributedDataParallel(
-            discriminator,
-            device_ids=[local_rank],
-            output_device=local_rank
-        )
 
         #caricamento checkpoint per fine-tuning se finetune=True
         if config_env.get("finetune", False):
@@ -652,11 +640,11 @@ def main():
                         "val_p_loss": val_metrics["val_p_loss"],
                     }, step=epoch)
 
-                print(
-                    f"Epoch {epoch+1}/{n_epochs} | "
-                    f"train_recon: {train_metrics['recon_loss']:.4f} | "
-                    f"val_recon: {val_metrics['val_recon_loss']:.4f}"
-                )
+                    print(
+                        f"Epoch {epoch+1}/{n_epochs} | "
+                        f"train_recon: {train_metrics['recon_loss']:.4f} | "
+                        f"val_recon: {val_metrics['val_recon_loss']:.4f}"
+                    )
 
                 all_val_recon.append(val_metrics["val_recon_loss"])
 
@@ -664,16 +652,26 @@ def main():
                 if is_best:
                     best_val_loss=val_metrics["val_recon_loss"]
 
-                save_checkpoint(
-                    epoch=epoch,
-                    autoencoder=autoencoder,
-                    discriminator=discriminator,
-                    optimizer_g=optimizer_g,
-                    optimizer_d=optimizer_d,
-                    val_loss=val_metrics["val_recon_loss"],
-                    save_dir=save_dir,
-                    is_best=is_best,
-                )
+                # SALVATAGGIO SOLO SU RANK 0: evita che 4 processi scrivano lo
+                # stesso file da ~967MB in contemporanea (contesa I/O e
+                # disallineamento dei rank al training successivo).
+                if is_main_process:
+                    save_checkpoint(
+                        epoch=epoch,
+                        autoencoder=autoencoder,
+                        discriminator=discriminator,
+                        optimizer_g=optimizer_g,
+                        optimizer_d=optimizer_d,
+                        val_loss=val_metrics["val_recon_loss"],
+                        save_dir=save_dir,
+                        is_best=is_best,
+                    )
+
+                # tutti i rank si riallineano qui prima di proseguire: rank 0 ha
+                # appena scritto il checkpoint (operazione lunga), gli altri lo
+                # aspettano, cosi' nessuno parte sfasato all'epoca successiva.
+                if dist.is_initialized():
+                    dist.barrier()
 
             scheduler_g.step()
 
@@ -687,17 +685,16 @@ def main():
             mlflow.log_metric("total_time_hours", total_time/3600)
             mlflow.log_artifact(os.path.join(save_dir, "autoencoder_best.pt"))
 
-        curve_path=save_learning_curves(
-            train_recon_loss=all_train_recon,
-            val_recon_loss=all_val_recon,
-            train_gen_loss=all_train_gen,
-            train_disc_loss=all_train_disc,
-            save_dir=save_dir,
-            val_interval=val_interval,
-            n_epochs=n_epochs,
-        )
+            curve_path=save_learning_curves(
+                train_recon_loss=all_train_recon,
+                val_recon_loss=all_val_recon,
+                train_gen_loss=all_train_gen,
+                train_disc_loss=all_train_disc,
+                save_dir=save_dir,
+                val_interval=val_interval,
+                n_epochs=n_epochs,
+            )
 
-        if is_main_process:
             mlflow.log_artifact(curve_path)
             mlflow.end_run()
 
