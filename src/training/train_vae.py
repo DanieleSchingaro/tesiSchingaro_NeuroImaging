@@ -500,6 +500,7 @@ def main():
     warm_up_epochs=train_cfg["warm_up_epochs"]
     cache_rate=train_cfg["cache_rate"]
     num_workers=train_cfg["num_workers"]
+    val_patch_size=train_cfg.get("val_patch_size", None)
 
     #path
     save_dir=config_env["model_dir"]
@@ -512,7 +513,7 @@ def main():
     print(f"GPU disponibili: {torch.cuda.device_count()}")
     set_determinism(seed=42)
 
-    rank = dist.is_initialized() and dist.get_rank() or 0
+    rank=dist.is_initialized() and dist.get_rank() or 0
     is_main_process=rank==0
 
     if is_main_process:
@@ -574,12 +575,13 @@ def main():
         all_train_gen=[]
         all_train_disc=[]
 
-        config_data = {
-            "patch_size": list(patch_size),
-            "batch_size": batch_size,
-            "cache_rate": cache_rate,
-            "num_workers": num_workers,
-            "random_aug": config_vae["data_option"]["random_aug"]
+        config_data={
+            "patch_size":list(patch_size),
+            "batch_size":batch_size,
+            "val_patch_size": val_patch_size,
+            "cache_rate":cache_rate,
+            "num_workers":num_workers,
+            "random_aug":config_vae["data_option"]["random_aug"]
         }
 
         train_loader, val_loader, _=setup_dataloaders(
