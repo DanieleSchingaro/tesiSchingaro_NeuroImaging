@@ -11,7 +11,7 @@ import torch
 from datetime import timedelta
 from torch.amp import GradScaler, autocast
 from torch.nn import L1Loss
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 import mlflow
@@ -554,9 +554,18 @@ def main():
         #optimizer
         optimizer_g, optimizer_d=setup_optimizers(autoencoder, discriminator, lr)
 
-        scheduler_g=CosineAnnealingLR(
-            optimizer_g, T_max=n_epochs, eta_min=1e-6
-        )
+        #warmup del learning rate (come MAISI): il modello grande (83M) si
+        #destabilizza col lr pieno fin dall'epoca 0. Si parte a lr*0.01 per le
+        #prime 10 epoche, poi lr*0.1 fino a epoca 20, poi lr pieno.
+        def warmup_rule(epoch):
+            if epoch < 10:
+                return 0.01
+            elif epoch < 20:
+                return 0.1
+            else:
+                return 1.0
+
+        scheduler_g=LambdaLR(optimizer_g, lr_lambda=warmup_rule)
 
         scaler_g=GradScaler("cuda")
 
